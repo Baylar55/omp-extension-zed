@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ZedCredentials } from "../auth/types.js";
-import { getOmpAgentDir } from "../auth/credential-store.js";
+import { findBrowserSessionCookie, getOmpAgentDir, saveCredentials } from "../auth/credential-store.js";
 
 export interface ModelPrice {
   input: number; // USD per 1M input tokens
@@ -170,12 +170,20 @@ export async function fetchZedUsage(creds: ZedCredentials | null | undefined): P
     "Origin": "https://dashboard.zed.dev",
   };
 
-  // 1. Try Frontend Billing API if session cookie is present
-  if (creds.sessionCookie) {
-    const cookieHeader = creds.sessionCookie.startsWith("zed.session=")
-      ? creds.sessionCookie
-      : `zed.session=${creds.sessionCookie}`;
+  // 1. Try Frontend Billing API if session cookie is present or auto-discoverable from browser
+  let cookieToTry = creds.sessionCookie;
+  let isAutoDiscovered = false;
 
+  if (!cookieToTry) {
+    const discovered = findBrowserSessionCookie();
+    if (discovered) {
+      cookieToTry = discovered;
+      isAutoDiscovered = true;
+    }
+  }
+
+  const tryBillingWithCookie = async (rawCookie: string): Promise<ZedUsageReport | null> => {
+    const cookieHeader = rawCookie.startsWith("zed.session=") ? rawCookie : `zed.session=${rawCookie}`;
     const billingEndpoints = [
       "https://cloud.zed.dev/frontend/billing/usage",
       "https://cloud.zed.dev/frontend/billing",
@@ -207,7 +215,10 @@ export async function fetchZedUsage(creds: ZedCredentials | null | undefined): P
           if (typeof tokenSpend["limit_in_cents"] === "number") {
             monthlyCredit = Number((tokenSpend["limit_in_cents"] / 100).toFixed(2));
           } else if (typeof data["credit_limit"] === "number") {
-            monthlyCredit = typeof data["credit_limit"] === "number" && data["credit_limit"] > 100 ? Number((data["credit_limit"] / 100).toFixed(2)) : Number(data["credit_limit"].toFixed(2));
+            monthlyCredit =
+              typeof data["credit_limit"] === "number" && data["credit_limit"] > 100
+                ? Number((data["credit_limit"] / 100).toFixed(2))
+                : Number(data["credit_limit"].toFixed(2));
           }
 
           let spentAmount = 0.0;
@@ -218,9 +229,15 @@ export async function fetchZedUsage(creds: ZedCredentials | null | undefined): P
           } else if (typeof data["current_spend_cents"] === "number") {
             spentAmount = Number((data["current_spend_cents"] / 100).toFixed(2));
           } else if (typeof data["current_spend"] === "number") {
-            spentAmount = data["current_spend"] > 100 && monthlyCredit <= 100 ? Number((data["current_spend"] / 100).toFixed(2)) : Number(data["current_spend"].toFixed(2));
+            spentAmount =
+              data["current_spend"] > 100 && monthlyCredit <= 100
+                ? Number((data["current_spend"] / 100).toFixed(2))
+                : Number(data["current_spend"].toFixed(2));
           } else if (typeof data["spent"] === "number") {
-            spentAmount = data["spent"] > 100 && monthlyCredit <= 100 ? Number((data["spent"] / 100).toFixed(2)) : Number(data["spent"].toFixed(2));
+            spentAmount =
+              data["spent"] > 100 && monthlyCredit <= 100
+                ? Number((data["spent"] / 100).toFixed(2))
+                : Number(data["spent"].toFixed(2));
           } else if (typeof data["spend"] === "number") {
             spentAmount = Number(data["spend"].toFixed(2));
           }
@@ -239,13 +256,41 @@ export async function fetchZedUsage(creds: ZedCredentials | null | undefined): P
             remainingCredit,
             spentPercentage,
             resetDate,
-            editPredictions: editPred ? { used: typeof editPred["used"] === "number" ? editPred["used"] : 0, limit: editPred["limit"] === null ? "unlimited" : String(editPred["limit"] ?? "unlimited") } : undefined,
+            editPredictions: editPred
+              ? {
+                  used: typeof editPred["used"] === "number" ? editPred["used"] : 0,
+                  limit: editPred["limit"] === null ? "unlimited" : String(editPred["limit"] ?? "unlimited"),
+                }
+              : undefined,
             hasDetailedBilling: true,
             raw: data,
           };
         }
       } catch {
         // Try next endpoint
+      }
+    }
+    return null;
+  };
+
+  if (cookieToTry) {
+    const billingReport = await tryBillingWithCookie(cookieToTry);
+    if (billingReport) {
+      if (isAutoDiscovered) {
+        saveCredentials({ sessionCookie: cookieToTry });
+      }
+      return billingReport;
+    }
+
+    // If initial cookie was stored but failed (expired), try a fresh browser scan
+    if (!isAutoDiscovered) {
+      const freshDiscovered = findBrowserSessionCookie();
+      if (freshDiscovered && freshDiscovered !== cookieToTry) {
+        const retryReport = await tryBillingWithCookie(freshDiscovered);
+        if (retryReport) {
+          saveCredentials({ sessionCookie: freshDiscovered });
+          return retryReport;
+        }
       }
     }
   }
@@ -409,13 +454,12 @@ export function formatUsageSummary(report: ZedUsageReport | null): string {
     lines.push(`Source:        ✓ Live Dashboard Sync (dashboard.zed.dev)`);
   } else {
     lines.push(
-      `Source:        Local Extension Estimate`,
-      `\n💡 To sync live dollar spend directly from dashboard.zed.dev:`,
-      `1. Open https://dashboard.zed.dev in your browser`,
-      `2. Press F12 → Application → Cookies → copy 'zed.session'`,
-      `3. Run: /zed set-cookie <your_zed.session_cookie>`,
-      `• Or manually set your current spend: /zed set-spend 0.53`,
-      `• Or reset session spend count: /zed reset-usage`,
+      `Source:        Local Extension Tracker`,
+      ``,
+      `💡 Note: Zed's client API only provides plan details, not dollar spend.`,
+      `• Auto-sync live spend from browser:   /zed sync`,
+      `• Or set your current monthly spend:   /zed set-spend 1.90`,
+      `• Or reset session spend count:       /zed reset-usage`,
     );
   }
   return lines.join("\n");

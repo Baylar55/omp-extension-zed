@@ -103,14 +103,16 @@ This displays:
 
 | Command | Description |
 | :--- | :--- |
-| `/zed usage` | Show live token consumption and remaining quota |
+| `/zed usage` | Show monthly usage, credit limits, and quota meter |
+| `/zed sync` | Auto-sync live dollar spend from browser session (no DevTools needed) |
 | `/zed status` | Display connection status and active Zed account |
 | `/zed models` | List all available Zed Pro / Student models |
-| `/zed login` | Trigger authentication / re-login flow |
+| `/zed login` | Trigger browser authentication / re-login flow |
 | `/zed logout` | Remove stored Zed credentials |
+| `/zed set-spend` | Set your baseline monthly dollar spend (e.g. `/zed set-spend 1.90`) |
 | `/zed set-token` | Manually save an access token |
 | `/zed set-cookie` | Manually save a zed.session cookie |
-
+| `/zed reset-usage`| Reset local spend counter to $0.00 |
 ---
 
 ## 👨‍💻 Local Development & Contributing

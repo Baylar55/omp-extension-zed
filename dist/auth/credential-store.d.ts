@@ -12,7 +12,7 @@ export declare function getCredentialsFilePath(): string;
  */
 export declare function getSystemZedCredentials(): ZedCredentials | null;
 /**
- * Attempts to find a live `zed.session` cookie from local browser profiles (e.g. Firefox).
+ * Attempts to find a live `zed.session` cookie from local browser profiles (Chrome, Edge, Brave, Firefox).
  */
 export declare function findBrowserSessionCookie(): string | null;
 /**

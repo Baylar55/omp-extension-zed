@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -153,45 +154,212 @@ foreach ($t in $targets) {
   return null;
 }
 
+function getWindowsChromiumKey(localStatePath: string): Buffer | null {
+  if (!fs.existsSync(localStatePath)) return null;
+  try {
+    const localState = JSON.parse(fs.readFileSync(localStatePath, "utf-8")) as { os_crypt?: { encrypted_key?: string } };
+    const encryptedKeyB64 = localState?.os_crypt?.encrypted_key;
+    if (!encryptedKeyB64) return null;
+    const encryptedKey = Buffer.from(encryptedKeyB64, "base64");
+    const keyData = encryptedKey.subarray(5);
+
+    const psScript = `
+$csharp = @"
+using System;
+using System.Runtime.InteropServices;
+public class Dpapi {
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+    public struct DATA_BLOB {
+        public int cbData;
+        public IntPtr pbData;
+    }
+    [DllImport("Crypt32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+    public static extern bool CryptUnprotectData(
+        ref DATA_BLOB pDataIn,
+        string szDataDescr,
+        ref DATA_BLOB pOptionalEntropy,
+        IntPtr pvReserved,
+        IntPtr pPromptStruct,
+        int dwFlags,
+        ref DATA_BLOB pDataOut
+    );
+    public static byte[] Decrypt(byte[] cipherText) {
+        DATA_BLOB inBlob = new DATA_BLOB();
+        DATA_BLOB outBlob = new DATA_BLOB();
+        DATA_BLOB entropy = new DATA_BLOB();
+        inBlob.cbData = cipherText.Length;
+        inBlob.pbData = Marshal.AllocHGlobal(cipherText.Length);
+        Marshal.Copy(cipherText, 0, inBlob.pbData, cipherText.Length);
+        try {
+            if (CryptUnprotectData(ref inBlob, null, ref entropy, IntPtr.Zero, IntPtr.Zero, 0, ref outBlob)) {
+                byte[] result = new byte[outBlob.cbData];
+                Marshal.Copy(outBlob.pbData, result, 0, outBlob.cbData);
+                return result;
+            }
+        } finally {
+            if (inBlob.pbData != IntPtr.Zero) Marshal.FreeHGlobal(inBlob.pbData);
+        }
+        return null;
+    }
+}
+"@
+Add-Type -TypeDefinition $csharp
+$enc = [Convert]::FromBase64String('${keyData.toString("base64")}')
+$dec = [Dpapi]::Decrypt($enc)
+if ($dec) { [Convert]::ToBase64String($dec) }
+`;
+    const encoded = Buffer.from(psScript, "utf16le").toString("base64");
+    const out = execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, {
+      encoding: "utf-8",
+      timeout: 4000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const lines = out.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("<") && !l.startsWith("#"));
+    const b64 = lines[lines.length - 1];
+    return b64 ? Buffer.from(b64, "base64") : null;
+  } catch {
+    return null;
+  }
+}
+
+function decryptChromiumValue(key: Buffer, buffer: Buffer): string | null {
+  try {
+    const prefix = buffer.subarray(0, 3).toString("utf8");
+    if (prefix !== "v10" && prefix !== "v11") return null;
+    const nonce = buffer.subarray(3, 15);
+    const ciphertextWithTag = buffer.subarray(15);
+    const ciphertext = ciphertextWithTag.subarray(0, ciphertextWithTag.length - 16);
+    const authTag = ciphertextWithTag.subarray(ciphertextWithTag.length - 16);
+
+    const decipher = crypto.createDecipheriv("aes-256-gcm", key, nonce);
+    decipher.setAuthTag(authTag);
+    let decrypted = decipher.update(ciphertext, undefined, "utf8");
+    decrypted += decipher.final("utf8");
+    return decrypted;
+  } catch {
+    return null;
+  }
+}
+
+function copyLockedFileWindows(src: string, dst: string): boolean {
+  try {
+    const cmd = `powershell -NoProfile -Command "$s = [System.IO.File]::Open('${src}', [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite); $ms = New-Object System.IO.MemoryStream; $s.CopyTo($ms); $s.Close(); [System.IO.File]::WriteAllBytes('${dst}', $ms.ToArray());"`;
+    execSync(cmd, { stdio: "ignore", timeout: 3000 });
+    return fs.existsSync(dst) && fs.statSync(dst).size > 0;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Attempts to find a live `zed.session` cookie from local browser profiles (e.g. Firefox).
+ * Attempts to find a live `zed.session` cookie from local browser profiles (Chrome, Edge, Brave, Firefox).
  */
 export function findBrowserSessionCookie(): string | null {
+  const platform = os.platform();
+  const candidates: string[] = [];
+
+  // 1. Scan Firefox profiles across platforms
   try {
-    const appData = process.env["APPDATA"] || path.join(os.homedir(), "AppData", "Roaming");
-    const ffProfilesDir = path.join(appData, "Mozilla", "Firefox", "Profiles");
+    const ffBase =
+      platform === "win32"
+        ? path.join(process.env["APPDATA"] || path.join(os.homedir(), "AppData", "Roaming"), "Mozilla", "Firefox", "Profiles")
+        : platform === "darwin"
+          ? path.join(os.homedir(), "Library", "Application Support", "Firefox", "Profiles")
+          : path.join(os.homedir(), ".mozilla", "firefox");
 
-    if (fs.existsSync(ffProfilesDir)) {
-      const profiles = fs.readdirSync(ffProfilesDir);
+    if (fs.existsSync(ffBase)) {
+      const profiles = fs.readdirSync(ffBase);
       for (const prof of profiles) {
-        const cookieDbPath = path.join(ffProfilesDir, prof, "cookies.sqlite");
-        if (fs.existsSync(cookieDbPath)) {
-          try {
-            const tmpPath = path.join(os.tmpdir(), `ff_cookie_scan_${Date.now()}_${Math.random().toString(36).slice(2)}.sqlite`);
-            fs.copyFileSync(cookieDbPath, tmpPath);
-            // Read SQLite using binary buffer scan for fast dependency-free extraction
-            const dbBuf = fs.readFileSync(tmpPath);
-            try { fs.unlinkSync(tmpPath); } catch {}
+        const cookieDbPath = path.join(ffBase, prof, "cookies.sqlite");
+        if (!fs.existsSync(cookieDbPath)) continue;
+        const tmpPath = path.join(os.tmpdir(), `ff_c_${Date.now()}_${Math.random().toString(36).slice(2)}.sqlite`);
+        try {
+          fs.copyFileSync(cookieDbPath, tmpPath);
+          const dbBuf = fs.readFileSync(tmpPath);
+          try { fs.unlinkSync(tmpPath); } catch {}
 
-            const text = dbBuf.toString("latin1");
-            const sessionIdx = text.indexOf("zed.session");
-            if (sessionIdx !== -1) {
-              // Find cookie signature pattern (e.g. standard base64 signature with sid json)
-              const match = text.slice(Math.max(0, sessionIdx - 100), sessionIdx + 400).match(/([A-Za-z0-9+/=]{40,}==?\{"sid":"[a-f0-9-]+"\})/);
-              if (match?.[1]) {
-                return match[1];
-              }
+          const text = dbBuf.toString("latin1");
+          const needle = "zed.session";
+          let idx = 0;
+          while ((idx = text.indexOf(needle, idx)) !== -1) {
+            const after = text.slice(idx + needle.length, idx + needle.length + 500);
+            const match = after.match(/([A-Za-z0-9+/=_-]{30,}==?\{"sid":"[a-f0-9-]+"\})/);
+            if (match?.[1]) {
+              candidates.push(match[1]);
             }
-          } catch {
-            // Ignore individual profile read errors
+            idx += needle.length;
           }
+        } catch {
+          try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch {}
         }
       }
     }
-  } catch {
-    // Ignore browser scan errors
+  } catch {}
+
+  // 2. Scan Chromium browsers (Chrome, Edge, Brave) on Windows
+  if (platform === "win32") {
+    try {
+      const localAppData = process.env["LOCALAPPDATA"] || path.join(os.homedir(), "AppData", "Local");
+      const chromiumBrowsers = [
+        path.join(localAppData, "Google", "Chrome", "User Data"),
+        path.join(localAppData, "Microsoft", "Edge", "User Data"),
+        path.join(localAppData, "BraveSoftware", "Brave-Browser", "User Data"),
+      ];
+
+      for (const root of chromiumBrowsers) {
+        const localState = path.join(root, "Local State");
+        if (!fs.existsSync(localState)) continue;
+        const key = getWindowsChromiumKey(localState);
+        if (!key) continue;
+
+        let profiles: string[] = [];
+        try {
+          profiles = fs.readdirSync(root).filter((d) => d === "Default" || d.startsWith("Profile "));
+        } catch {
+          continue;
+        }
+
+        for (const prof of profiles) {
+          const cookiePaths = [
+            path.join(root, prof, "Network", "Cookies"),
+            path.join(root, prof, "Cookies"),
+          ];
+
+          for (const cp of cookiePaths) {
+            if (!fs.existsSync(cp)) continue;
+            const tmp = path.join(os.tmpdir(), `cr_c_${Date.now()}_${Math.random().toString(36).slice(2)}.sqlite`);
+            if (copyLockedFileWindows(cp, tmp)) {
+              try {
+                const buf = fs.readFileSync(tmp);
+                try { fs.unlinkSync(tmp); } catch {}
+                const needle = Buffer.from("zed.session");
+                let offset = 0;
+                while ((offset = buf.indexOf(needle, offset)) !== -1) {
+                  const slice = buf.subarray(offset, offset + 600);
+                  let v10Idx = slice.indexOf(Buffer.from("v10"));
+                  if (v10Idx === -1) v10Idx = slice.indexOf(Buffer.from("v11"));
+                  if (v10Idx !== -1) {
+                    for (let len = 40; len < 400; len++) {
+                      const dec = decryptChromiumValue(key, slice.subarray(v10Idx, v10Idx + len));
+                      if (dec && dec.includes('"sid":')) {
+                        candidates.push(dec);
+                        break;
+                      }
+                    }
+                  }
+                  offset += needle.length;
+                }
+              } catch {
+                try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
+              }
+            }
+          }
+        }
+      }
+    } catch {}
   }
-  return null;
+
+  return candidates[0] || null;
 }
 
 /**

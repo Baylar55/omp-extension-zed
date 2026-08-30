@@ -46,6 +46,8 @@ describe("Usage Tracker", () => {
     expect(formatted).toContain("Credit Spend:  $0.00 / $10.00");
     expect(formatted).toContain("Remaining:     $10.00");
     expect(formatted).toContain("unlimited");
+    expect(formatted).toContain("/zed sync");
+    expect(formatted).toContain("/zed set-spend");
   });
 
   it("handles null reports gracefully with setup instructions", () => {
@@ -174,5 +176,22 @@ describe("Usage Tracker", () => {
     resetLocalSpendHistory();
     hist = getLocalSpendHistory();
     expect(hist.spentAmount).toBe(0.0);
+  });
+
+  it("includes /zed sync and note about Zed client API in usage summary", () => {
+    const report: ZedUsageReport = {
+      planName: "Zed Student Plan",
+      monthlyCredit: 5.0,
+      spentAmount: 1.90,
+      remainingCredit: 3.10,
+      spentPercentage: 38,
+      username: "Baylar55",
+      hasDetailedBilling: false,
+    };
+
+    const formatted = formatUsageSummary(report);
+    expect(formatted).toContain("Local Extension Tracker");
+    expect(formatted).toContain("/zed sync");
+    expect(formatted).toContain("/zed set-spend");
   });
 });

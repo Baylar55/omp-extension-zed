@@ -1,5 +1,5 @@
-import { clearCredentials, loadCredentials, maskSecret, saveCredentials } from "../auth/credential-store.js";
-import { startOAuthFlow } from "../auth/oauth.js";
+import { clearCredentials, findBrowserSessionCookie, loadCredentials, maskSecret, saveCredentials } from "../auth/credential-store.js";
+import { openBrowser, startOAuthFlow } from "../auth/oauth.js";
 import { ZED_MODELS } from "../models.js";
 import { fetchZedUsage, formatUsageSummary, resetLocalSpendHistory, setLocalSpendAmount } from "../usage/tracker.js";
 /**
@@ -113,6 +113,29 @@ export function registerZedCommands(pi) {
                     ctx.ui.notify(`✓ Current spend set to $${amount.toFixed(2)}.`, "info");
                     break;
                 }
+                case "sync": {
+                    ctx.ui.notify("Scanning local browsers for active dashboard.zed.dev session...", "info");
+                    const creds = loadCredentials();
+                    const discoveredCookie = findBrowserSessionCookie();
+                    if (discoveredCookie) {
+                        const report = await fetchZedUsage({ ...creds, sessionCookie: discoveredCookie });
+                        if (report && report.hasDetailedBilling) {
+                            saveCredentials({ sessionCookie: discoveredCookie });
+                            ctx.ui.notify("✓ Successfully synced live billing from browser session!", "info");
+                            const summary = formatUsageSummary(report);
+                            ctx.ui.notify(summary, "info");
+                            break;
+                        }
+                    }
+                    // If no working cookie found in browser DBs, open dashboard in browser
+                    openBrowser("https://dashboard.zed.dev");
+                    ctx.ui.notify([
+                        "Opened https://dashboard.zed.dev in your browser.",
+                        "1. Log in on dashboard.zed.dev if needed.",
+                        "2. Run '/zed sync' to auto-import your live spend (no DevTools needed!).",
+                    ].join("\n"), "info");
+                    break;
+                }
                 case "reset-usage": {
                     resetLocalSpendHistory();
                     ctx.ui.notify("✓ Local usage spend count has been reset to $0.00.", "info");
@@ -122,13 +145,14 @@ export function registerZedCommands(pi) {
                     const help = [
                         `⚡ Zed Extension Commands:`,
                         `• /zed usage       - View monthly credit usage & quota meter`,
+                        `• /zed sync        - Auto-sync live dollar spend from browser session`,
                         `• /zed status      - View authentication & connection status`,
                         `• /zed models      - List all accessible Zed models`,
                         `• /zed login       - Connect your Zed account via browser`,
                         `• /zed logout      - Remove stored Zed credentials`,
                         `• /zed set-token   - Manually save an access token`,
-                        `• /zed set-cookie  - Manually save a zed.session cookie for live dashboard sync`,
-                        `• /zed set-spend   - Set current month spend (e.g. /zed set-spend 0.53)`,
+                        `• /zed set-cookie  - Manually save a zed.session cookie`,
+                        `• /zed set-spend   - Set baseline monthly spend (e.g. /zed set-spend 1.90)`,
                         `• /zed reset-usage - Reset local spend count to $0.00`,
                     ].join("\n");
                     ctx.ui.notify(help, "info");
