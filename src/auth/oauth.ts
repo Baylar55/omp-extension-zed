@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as http from "node:http";
 import * as url from "node:url";
 import { exec } from "node:child_process";
@@ -29,26 +30,73 @@ export function openBrowser(targetUrl: string): void {
 }
 
 /**
- * Runs a local loopback server to capture Zed's OAuth / session callback.
+ * Generates an RSA 2048-bit keypair formatted for Zed's PKCS#1 DER native_app_signin.
  */
-export async function startOAuthFlow(port = DEFAULT_CALLBACK_PORT): Promise<ZedCredentials> {
+function generateZedKeypair(): {
+  publicKeyBase64Url: string;
+  privateKeyPem: string;
+} {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    publicKeyEncoding: {
+      type: "pkcs1",
+      format: "der",
+    },
+    privateKeyEncoding: {
+      type: "pkcs1",
+      format: "pem",
+    },
+  });
+
+  const publicKeyBase64Url = publicKey.toString("base64url");
+  return { publicKeyBase64Url, privateKeyPem: privateKey };
+}
+
+/**
+ * Decrypts the Base64URL-encoded token sent back by zed.dev using PKCS#1 v1.5 padding.
+ */
+function decryptZedToken(encryptedTokenBase64Url: string, privateKeyPem: string): string {
+  const encryptedBytes = Buffer.from(encryptedTokenBase64Url, "base64url");
+  const decrypted = crypto.privateDecrypt(
+    {
+      key: privateKeyPem,
+      padding: crypto.constants.RSA_PKCS1_PADDING,
+    },
+    encryptedBytes,
+  );
+  return decrypted.toString("utf-8");
+}
+
+/**
+ * Runs a local loopback server and initiates Zed's native RSA PKCS#1 sign-in flow.
+ */
+export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT): Promise<ZedCredentials> {
   return new Promise<ZedCredentials>((resolve, reject) => {
+    // Generate RSA keypair for this login session
+    const { publicKeyBase64Url, privateKeyPem } = generateZedKeypair();
+
     const server = http.createServer((req, res) => {
       try {
         const parsedUrl = url.parse(req.url || "", true);
         const query = parsedUrl.query;
 
-        // Check for access token or session cookie returned in callback
-        const accessToken = (query["access_token"] || query["token"]) as string | undefined;
-        const sessionCookie = query["session"] as string | undefined;
-        const githubUsername = query["username"] as string | undefined;
+        const rawAccessToken = (query["access_token"] || query["token"]) as string | undefined;
         const userId = query["user_id"] as string | undefined;
+        const sessionCookie = query["session"] as string | undefined;
 
-        if (accessToken || sessionCookie) {
+        if (rawAccessToken) {
+          let accessToken = rawAccessToken;
+
+          // Attempt RSA decryption if it's an encrypted token
+          try {
+            accessToken = decryptZedToken(rawAccessToken, privateKeyPem);
+          } catch {
+            // If already plaintext, use as is
+          }
+
           const creds: ZedCredentials = {
             accessToken,
             sessionCookie,
-            githubUsername,
             userId,
           };
 
@@ -62,16 +110,16 @@ export async function startOAuthFlow(port = DEFAULT_CALLBACK_PORT): Promise<ZedC
               <title>Zed Pro Authenticated</title>
               <style>
                 body { font-family: system-ui, sans-serif; background: #121212; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-                .card { background: #1e1e1e; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); text-align: center; max-width: 400px; }
-                h1 { color: #4ade80; font-size: 1.5rem; margin-bottom: 0.5rem; }
-                p { color: #a1a1aa; font-size: 0.95rem; }
+                .card { background: #1e1e1e; padding: 2.5rem; border-radius: 14px; box-shadow: 0 8px 30px rgba(0,0,0,0.6); text-align: center; max-width: 420px; border: 1px solid #333; }
+                h1 { color: #4ade80; font-size: 1.6rem; margin-bottom: 0.75rem; }
+                p { color: #a1a1aa; font-size: 1rem; line-height: 1.5; }
               </style>
             </head>
             <body>
               <div class="card">
                 <h1>✓ Zed Pro Authenticated!</h1>
-                <p>You have successfully connected your Zed Pro account to Oh My Pi.</p>
-                <p>You may now close this tab and return to your terminal.</p>
+                <p>Your Zed account is now successfully connected to Oh My Pi.</p>
+                <p>You can close this browser window and return to your terminal.</p>
               </div>
             </body>
             </html>
@@ -81,7 +129,7 @@ export async function startOAuthFlow(port = DEFAULT_CALLBACK_PORT): Promise<ZedC
           resolve(creds);
         } else {
           res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("Authentication failed: No token or session received.");
+          res.end("Authentication failed: No access token received in redirect.");
         }
       } catch (err) {
         res.writeHead(500, { "Content-Type": "text/plain" });
@@ -91,20 +139,30 @@ export async function startOAuthFlow(port = DEFAULT_CALLBACK_PORT): Promise<ZedC
       }
     });
 
+    server.listen(preferredPort, "127.0.0.1", () => {
+      const address = server.address();
+      const actualPort = typeof address === "object" && address ? address.port : preferredPort;
+
+      // Zed's official native signin endpoint
+      const signinUrl = `https://zed.dev/native_app_signin?native_app_port=${actualPort}&native_app_public_key=${publicKeyBase64Url}`;
+      openBrowser(signinUrl);
+    });
+
     server.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "EADDRINUSE") {
-        reject(new Error(`OAuth callback port ${port} is already in use.`));
+        // Retry with a dynamic port if default port is taken
+        server.listen(0, "127.0.0.1", () => {
+          const address = server.address();
+          const actualPort = typeof address === "object" && address ? address.port : 0;
+          const signinUrl = `https://zed.dev/native_app_signin?native_app_port=${actualPort}&native_app_public_key=${publicKeyBase64Url}`;
+          openBrowser(signinUrl);
+        });
       } else {
         reject(err);
       }
     });
 
-    server.listen(port, "127.0.0.1", () => {
-      const loginUrl = `https://zed.dev/auth/login?redirect_uri=http://127.0.0.1:${port}/`;
-      openBrowser(loginUrl);
-    });
-
-    // Auto-timeout after 3 minutes if user abandons the browser tab
+    // Auto-timeout after 3 minutes if user abandons browser
     const timeout = setTimeout(() => {
       server.close();
       reject(new Error("Zed login timed out after 3 minutes."));
