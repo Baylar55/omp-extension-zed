@@ -3,6 +3,15 @@
   "version": "1.0.0",
   "description": "Zed Pro and Student Plan integration extension for Oh My Pi",
   "license": "MIT",
+  "author": "Baylar Sadigov",
+  "homepage": "https://github.com/Baylar55/omp-extension-zed#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Baylar55/omp-extension-zed.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Baylar55/omp-extension-zed/issues"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
