@@ -163,9 +163,8 @@ export async function fetchZedUsage(creds) {
                     const editPred = currentUsage["edit_predictions"] || {};
                     const planRaw = data["plan"] || "";
                     const planName = normalizePlanName(planRaw);
-                    const isStudent = planName.toLowerCase().includes("student") || planRaw.toLowerCase().includes("student");
                     const isFree = planName.toLowerCase().includes("free") || planRaw.toLowerCase().includes("free");
-                    let monthlyCredit = isStudent ? 5.0 : isFree ? 0.0 : 10.0;
+                    let monthlyCredit = isFree ? 0.0 : 10.0;
                     if (typeof tokenSpend["limit_in_cents"] === "number") {
                         monthlyCredit = Number((tokenSpend["limit_in_cents"] / 100).toFixed(2));
                     }
@@ -296,9 +295,8 @@ export async function fetchZedUsage(creds) {
                         // Format clean plan name
                         const rawPlan = (planObj["plan_v3"] || orgPlan || planObj["plan_v2"] || planObj["plan"] || user["plan"]);
                         const planName = normalizePlanName(rawPlan || (user["is_pro"] ? "pro" : undefined));
-                        const isStudent = planName.toLowerCase().includes("student") || (rawPlan && rawPlan.toLowerCase().includes("student"));
                         const isFree = planName.toLowerCase().includes("free") || (rawPlan && rawPlan.toLowerCase().includes("free"));
-                        const monthlyCredit = isStudent ? 5.0 : isFree ? 0.0 : 10.0;
+                        const monthlyCredit = isFree ? 0.0 : 10.0;
                         const username = (user["github_login"] || user["username"] || user["name"] || creds.githubUsername);
                         const subPeriod = planObj["subscription_period"];
                         const resetDate = (subPeriod?.["ended_at"] || data["period_end"]);
@@ -334,7 +332,7 @@ export async function fetchZedUsage(creds) {
     // 3. Fallback: if we have any valid credentials, return a baseline active report
     if (creds.accessToken || creds.sessionCookie) {
         const localSpend = getLocalSpendHistory();
-        const monthlyCredit = 5.0;
+        const monthlyCredit = 10.0;
         const spentAmount = Math.min(monthlyCredit, Number(localSpend.spentAmount.toFixed(2)));
         const remainingCredit = Math.max(0, Number((monthlyCredit - spentAmount).toFixed(2)));
         const spentPercentage = monthlyCredit > 0 ? Math.min(100, Math.round((spentAmount / monthlyCredit) * 100)) : 0;
