@@ -1,0 +1,64 @@
+{
+  "name": "@baylarsadigov/omp-extension-zed",
+  "version": "1.0.0",
+  "description": "Zed Pro and Student Plan integration extension for Oh My Pi",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "omp-extension",
+    "omp-plugin",
+    "pi-extension",
+    "zed",
+    "zed-pro",
+    "claude",
+    "openai",
+    "gemini"
+  ],
+  "omp": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "@oh-my-pi/pi-coding-agent": ">=16.5.0"
+  },
+  "peerDependenciesMeta": {
+    "@oh-my-pi/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "18.0.4",
+    "@types/node": "^22.13.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

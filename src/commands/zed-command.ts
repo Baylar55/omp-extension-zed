@@ -1,0 +1,124 @@
+import type { ExtensionAPI, ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
+import { clearCredentials, loadCredentials, maskSecret, saveCredentials } from "../auth/credential-store.js";
+import { startOAuthFlow } from "../auth/oauth.js";
+import { ZED_MODELS } from "../models.js";
+import { fetchZedUsage, formatUsageSummary } from "../usage/tracker.js";
+
+/**
+ * Registers the `/zed` slash command and its subcommands.
+ */
+export function registerZedCommands(pi: ExtensionAPI): void {
+  pi.registerCommand("zed", {
+    description: "Manage Zed Pro / Student subscription models, authentication, and usage",
+    handler: async (args: string, ctx: ExtensionCommandContext) => {
+      const subCommand = args.trim().toLowerCase().split(/\s+/)[0];
+
+      switch (subCommand) {
+        case "usage": {
+          ctx.ui.notify("Fetching live usage from Zed Cloud...", "info");
+          const creds = loadCredentials();
+          if (!creds) {
+            ctx.ui.notify("No Zed credentials found. Please run '/zed login' first.", "warning");
+            return;
+          }
+
+          const report = await fetchZedUsage(creds);
+          const summary = formatUsageSummary(report);
+          ctx.ui.notify(summary, "info");
+          break;
+        }
+
+        case "status": {
+          const creds = loadCredentials();
+          if (!creds) {
+            ctx.ui.notify("Zed Status: Disconnected (No credentials stored). Run '/zed login'.", "warning");
+            return;
+          }
+
+          const tokenDisplay = maskSecret(creds.accessToken);
+          const cookieDisplay = maskSecret(creds.sessionCookie);
+          const user = creds.githubUsername || creds.userId || "Authenticated User";
+
+          const statusMsg = [
+            `🔌 Zed Pro Status: Connected`,
+            `User:          ${user}`,
+            `Access Token:  ${tokenDisplay}`,
+            `Session Cookie:${cookieDisplay}`,
+            `Saved At:      ${creds.savedAt ? new Date(creds.savedAt).toLocaleString() : "Unknown"}`,
+          ].join("\n");
+
+          ctx.ui.notify(statusMsg, "info");
+          break;
+        }
+
+        case "models": {
+          const modelList = ZED_MODELS.map(
+            (m) => `• zed/${m.id} (${m.name}) - Context: ${(m.contextWindow / 1000).toFixed(0)}k tokens`,
+          ).join("\n");
+
+          ctx.ui.notify(`📋 Available Zed Models:\n${modelList}`, "info");
+          break;
+        }
+
+        case "login": {
+          ctx.ui.notify("Starting Zed authentication in browser...", "info");
+          try {
+            const creds = await startOAuthFlow();
+            ctx.ui.notify(`✓ Successfully logged in as ${creds.githubUsername || "Zed User"}!`, "info");
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            ctx.ui.notify(`Authentication failed: ${msg}`, "error");
+          }
+          break;
+        }
+
+        case "logout": {
+          const removed = clearCredentials();
+          if (removed) {
+            ctx.ui.notify("✓ Successfully logged out from Zed. Credentials removed.", "info");
+          } else {
+            ctx.ui.notify("No active Zed credentials found to remove.", "info");
+          }
+          break;
+        }
+
+        case "set-token": {
+          const token = args.replace(/^set-token\s+/i, "").trim();
+          if (!token) {
+            ctx.ui.notify("Usage: /zed set-token <your_token>", "warning");
+            return;
+          }
+          saveCredentials({ accessToken: token });
+          ctx.ui.notify("✓ Token saved successfully!", "info");
+          break;
+        }
+
+        case "set-cookie": {
+          const cookie = args.replace(/^set-cookie\s+/i, "").trim();
+          if (!cookie) {
+            ctx.ui.notify("Usage: /zed set-cookie <your_session_cookie>", "warning");
+            return;
+          }
+          saveCredentials({ sessionCookie: cookie });
+          ctx.ui.notify("✓ Session cookie saved successfully!", "info");
+          break;
+        }
+
+        default: {
+          const help = [
+            `⚡ Zed Extension Commands:`,
+            `• /zed usage       - View monthly credit usage & quota meter`,
+            `• /zed status      - View authentication & connection status`,
+            `• /zed models      - List all accessible Zed models`,
+            `• /zed login       - Connect your Zed account via browser`,
+            `• /zed logout      - Remove stored Zed credentials`,
+            `• /zed set-token   - Manually save an access token`,
+            `• /zed set-cookie  - Manually save a zed.session cookie`,
+          ].join("\n");
+          ctx.ui.notify(help, "info");
+          break;
+        }
+      }
+    },
+  });
+}
