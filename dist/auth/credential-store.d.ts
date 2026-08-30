@@ -8,17 +8,36 @@ export declare function getOmpAgentDir(): string;
  */
 export declare function getCredentialsFilePath(): string;
 /**
- * Reads stored credentials from disk, checking environment variables first.
+ * Attempts to read Zed credentials from the operating system's native keychain / credential manager.
  */
-export declare function loadCredentials(): ZedCredentials | null;
+export declare function getSystemZedCredentials(): ZedCredentials | null;
 /**
- * Persists Zed credentials to disk.
+ * Attempts to find a live `zed.session` cookie from local browser profiles (e.g. Firefox).
  */
-export declare function saveCredentials(creds: ZedCredentials): void;
+export declare function findBrowserSessionCookie(): string | null;
 /**
- * Clears stored credentials from disk.
+ * Options for loading credentials.
+ */
+export interface LoadCredentialsOptions {
+    /** Skip scanning OS keychain / Credential Manager */
+    skipSystem?: boolean;
+}
+/**
+ * Reads stored credentials from disk, checking environment variables and system keychain.
+ */
+export declare function loadCredentials(options?: LoadCredentialsOptions): ZedCredentials | null;
+/**
+ * Persists Zed credentials to disk, merging with existing values.
+ */
+export declare function saveCredentials(creds: Partial<ZedCredentials>): void;
+/**
+ * Clears stored credentials and marks state as logged out.
  */
 export declare function clearCredentials(): boolean;
+/**
+ * Removes stored credential file entirely from disk.
+ */
+export declare function deleteCredentialsFile(): boolean;
 /**
  * Formats a secret string with masking for safe console / UI display.
  */

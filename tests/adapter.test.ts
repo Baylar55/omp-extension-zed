@@ -4,6 +4,7 @@ import {
   createChatCompletionResponse,
   createSSEChunk,
   extractTextContent,
+  getZedProvider,
   normalizeModelId,
 } from "../src/bridge/adapter.js";
 import type { OpenAIChatRequest } from "../src/bridge/types.js";
@@ -20,6 +21,14 @@ describe("Adapter utilities", () => {
     expect(normalizeModelId("gemini-3.5-flash")).toBe("gemini-3.5-flash");
     expect(normalizeModelId("gemini-3-flash")).toBe("gemini-3-flash");
     expect(normalizeModelId("custom-model")).toBe("custom-model");
+    expect(normalizeModelId("gemini-3.1-pro")).toBe("gemini-3.1-pro-preview");
+  });
+
+  it("resolves Zed provider correctly", () => {
+    expect(getZedProvider("claude-sonnet-4-6")).toBe("anthropic");
+    expect(getZedProvider("zed/gpt-5.4")).toBe("open_ai");
+    expect(getZedProvider("gemini-3.5-flash")).toBe("google");
+    expect(getZedProvider("gemini-3.1-pro-preview")).toBe("google");
   });
 
   it("extracts text content from string and array shapes", () => {
@@ -59,17 +68,26 @@ describe("Adapter utilities", () => {
     const zedReq = adaptOpenAIToZed(req);
 
     expect(zedReq.model).toBe("claude-sonnet-4.6");
-    expect(zedReq.messages.length).toBe(4);
-    expect(zedReq.messages[0]).toEqual({
-      role: "system",
-      content: "You are a helpful assistant.",
-    });
-    expect(zedReq.messages[1]).toEqual({
-      role: "user",
-      content: "Write a quicksort in Python",
-    });
-    expect(zedReq.messages[2]?.content).toContain("[Tool Call: test_tool");
-    expect(zedReq.messages[3]?.content).toContain("[Tool Result for call_123]: Result: 42");
+    expect(zedReq.provider).toBe("anthropic");
+    expect(zedReq.intent).toBe("user_prompt");
+    expect(zedReq.thread_id).toBeDefined();
+    expect(zedReq.prompt_id).toBeDefined();
+    expect(zedReq.temperature).toBe(0.7);
+    expect(zedReq.system).toContain("You are a helpful assistant.");
+    expect(zedReq.provider_request.model).toBe("claude-sonnet-4.6");
+    expect(zedReq.provider_request.system).toContain("You are a helpful assistant.");
+    // system message is extracted, so provider_request.messages has 3 entries (user, assistant, tool_result)
+    expect(zedReq.provider_request.messages.length).toBe(3);
+    const [userMsg, assistantMsg, toolResultMsg] = zedReq.provider_request.messages;
+    expect(userMsg.role).toBe("user");
+    expect((userMsg.content as Array<{ type: string; text: string }>)[0].text).toBe("Write a quicksort in Python");
+    expect(assistantMsg.role).toBe("assistant");
+    const assistantBlocks = assistantMsg.content as Array<{ type: string; text?: string; name?: string }>;
+    expect(assistantBlocks.some((b) => b.type === "text" && b.text === "Sure, here it is.")).toBe(true);
+    expect(assistantBlocks.some((b) => b.type === "tool_use" && b.name === "test_tool")).toBe(true);
+    const toolResultBlock = (toolResultMsg.content as Array<{ type: string }>)[0] as { type: string; tool_use_id: string };
+    expect(toolResultBlock.type).toBe("tool_result");
+    expect(toolResultBlock.tool_use_id).toBe("call_123");
   });
 
   it("creates valid OpenAI SSE data chunks", () => {

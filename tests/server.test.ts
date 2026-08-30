@@ -34,6 +34,15 @@ describe("Bridge HTTP Server", () => {
   });
 
   it("rejects unauthorized completions request without credentials", async () => {
+    // Ensure no credentials leak from parallel integration tests
+    clearCredentials();
+    delete process.env["ZED_AUTH_TOKEN"];
+    delete process.env["ZED_TOKEN"];
+    delete process.env["ZED_ACCESS_TOKEN"];
+    // Small delay to let FS settle if another test just wrote
+    await new Promise((r) => setTimeout(r, 10));
+    clearCredentials();
+
     const res = await fetch(`http://127.0.0.1:${bridge.port}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

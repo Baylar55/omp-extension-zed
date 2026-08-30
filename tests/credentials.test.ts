@@ -35,10 +35,27 @@ describe("Credential store", () => {
     const afterClear = loadCredentials();
     expect(afterClear).toBeNull();
   });
-
   it("prioritizes environment variables when set", () => {
     process.env["ZED_AUTH_TOKEN"] = "env_token_abc";
+    process.env["ZED_USER_ID"] = "123456";
     const loaded = loadCredentials();
     expect(loaded?.accessToken).toBe("env_token_abc");
+    expect(loaded?.userId).toBe("123456");
+    expect(loaded?.source).toBe("env");
+  });
+
+  it("respects loggedOut state until new credentials are saved", () => {
+    saveCredentials({
+      accessToken: "first_token",
+    });
+    expect(loadCredentials()?.accessToken).toBe("first_token");
+
+    clearCredentials();
+    expect(loadCredentials()).toBeNull();
+
+    saveCredentials({
+      accessToken: "second_token",
+    });
+    expect(loadCredentials()?.accessToken).toBe("second_token");
   });
 });

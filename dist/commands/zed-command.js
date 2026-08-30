@@ -14,27 +14,40 @@ export function registerZedCommands(pi) {
                 case "usage": {
                     ctx.ui.notify("Fetching live usage from Zed Cloud...", "info");
                     const creds = loadCredentials();
-                    if (!creds) {
-                        ctx.ui.notify("No Zed credentials found. Please run '/zed login' first.", "warning");
+                    if (!creds || (!creds.accessToken && !creds.sessionCookie)) {
+                        ctx.ui.notify("No Zed credentials found. Please run '/zed login' to connect your Zed account.", "warning");
                         return;
                     }
                     const report = await fetchZedUsage(creds);
+                    if (report && report.username && !creds.githubUsername) {
+                        saveCredentials({
+                            ...creds,
+                            githubUsername: report.username,
+                            userId: report.userId || creds.userId,
+                        });
+                    }
                     const summary = formatUsageSummary(report);
                     ctx.ui.notify(summary, "info");
                     break;
                 }
                 case "status": {
                     const creds = loadCredentials();
-                    if (!creds) {
+                    if (!creds || (!creds.accessToken && !creds.sessionCookie)) {
                         ctx.ui.notify("Zed Status: Disconnected (No credentials stored). Run '/zed login'.", "warning");
                         return;
                     }
                     const tokenDisplay = maskSecret(creds.accessToken);
                     const cookieDisplay = maskSecret(creds.sessionCookie);
                     const user = creds.githubUsername || creds.userId || "Authenticated User";
+                    const sourceDisplay = creds.source === "system_keychain"
+                        ? "System Keychain / Credential Manager (Auto-detected)"
+                        : creds.source === "env"
+                            ? "Environment Variable"
+                            : "Saved Auth File";
                     const statusMsg = [
                         `🔌 Zed Pro Status: Connected`,
                         `User:          ${user}`,
+                        `Source:        ${sourceDisplay}`,
                         `Access Token:  ${tokenDisplay}`,
                         `Session Cookie:${cookieDisplay}`,
                         `Saved At:      ${creds.savedAt ? new Date(creds.savedAt).toLocaleString() : "Unknown"}`,

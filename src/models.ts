@@ -205,13 +205,13 @@ export const ZED_MODELS: ProviderModelConfig[] = [
 
   // --- Google Gemini Series ---
   {
-    id: "gemini-3.1-pro",
+    id: "gemini-3.1-pro-preview",
     name: "Gemini 3.1 Pro (Zed)",
     api: "openai-completions",
     reasoning: true,
     input: ["text", "image"],
     contextWindow: 200000,
-    maxTokens: 8192,
+    maxTokens: 65535,
     cost: {
       input: 2.2,
       output: 13.2,
@@ -225,8 +225,8 @@ export const ZED_MODELS: ProviderModelConfig[] = [
     api: "openai-completions",
     reasoning: true,
     input: ["text", "image"],
-    contextWindow: 1000000,
-    maxTokens: 8192,
+    contextWindow: 1048576,
+    maxTokens: 65535,
     cost: {
       input: 1.65,
       output: 9.9,
@@ -240,8 +240,8 @@ export const ZED_MODELS: ProviderModelConfig[] = [
     api: "openai-completions",
     reasoning: true,
     input: ["text", "image"],
-    contextWindow: 1000000,
-    maxTokens: 8192,
+    contextWindow: 1048576,
+    maxTokens: 65535,
     cost: {
       input: 0.55,
       output: 3.3,

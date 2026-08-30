@@ -86,14 +86,29 @@ export interface OpenAIChatResponse {
         total_tokens: number;
     };
 }
+export declare const ZED_ENDPOINT = "https://cloud.zed.dev/completions";
+export declare const ZED_VERSION = "0.228.0+stable.203.8421009ef8a022df1196d54bb42fd94366ec0988";
 export interface ZedAssistantRequest {
+    thread_id: string;
+    prompt_id: string;
+    intent: "user_prompt";
+    provider: string;
     model: string;
-    messages: Array<{
-        role: string;
-        content: string;
-    }>;
-    stream?: boolean;
-    temperature?: number;
-    tools?: unknown[];
+    provider_request: {
+        model: string;
+        max_tokens: number;
+        messages: Array<{
+            role: string;
+            content: unknown[];
+        }>;
+        tools?: Array<{
+            name: string;
+            description?: string;
+            input_schema: unknown;
+        }>;
+        system: string;
+    };
+    system: string;
+    temperature: number;
 }
 //# sourceMappingURL=types.d.ts.map
