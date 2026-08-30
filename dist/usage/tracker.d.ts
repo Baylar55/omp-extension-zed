@@ -6,16 +6,13 @@ export interface ZedUsageReport {
     remainingCredit: number;
     spentPercentage: number;
     resetDate?: string;
-    modelsUsed?: Array<{
-        model: string;
-        inputTokens: number;
-        outputTokens: number;
-        cost: number;
-    }>;
+    username?: string;
+    userId?: string;
+    hasDetailedBilling: boolean;
     raw?: unknown;
 }
 /**
- * Fetches and parses live usage information from Zed's frontend billing API.
+ * Fetches and parses live usage/account info from Zed Cloud using available credentials.
  */
 export declare function fetchZedUsage(creds: ZedCredentials): Promise<ZedUsageReport | null>;
 /**
