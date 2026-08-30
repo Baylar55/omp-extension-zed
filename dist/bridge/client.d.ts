@@ -19,12 +19,15 @@ export interface StreamEvent {
 export declare class ZedCloudClient {
     private readonly baseUrl;
     private readonly version;
+    private cachedJwt;
+    private cachedJwtExp;
     constructor(baseUrl?: string, version?: string);
+    private resolveJwt;
     /**
      * Builds request headers with appropriate auth credentials.
      * Zed expects Bearer JWT plus Zed version headers.
      */
-    private buildHeaders;
+    private buildHeadersWithJwt;
     /**
      * Sends a completion request to Zed and streams back text / events.
      * Zed streams NDJSON (newline-delimited JSON) with event types:

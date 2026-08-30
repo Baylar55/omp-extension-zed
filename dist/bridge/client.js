@@ -5,6 +5,26 @@ function normalizeToken(raw) {
         return "";
     return raw.trim().replace(/^Bearer\s+/i, "").replace(/\s+/g, "");
 }
+function isJwt(token) {
+    return token.startsWith("eyJ") && token.split(".").length === 3;
+}
+function decodeJwtExp(token) {
+    try {
+        const payload = token.split(".")[1];
+        if (!payload)
+            return null;
+        // Pad base64url
+        let b64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+        const pad = b64.length % 4;
+        if (pad)
+            b64 += "=".repeat(4 - pad);
+        const json = JSON.parse(Buffer.from(b64, "base64").toString("utf-8"));
+        if (typeof json.exp === "number")
+            return json.exp * 1000;
+    }
+    catch { }
+    return null;
+}
 /**
  * Client for dispatching completion requests to Zed Cloud / API backend.
  * Verified against live endpoint 2026-08-12: POST https://cloud.zed.dev/completions
@@ -12,16 +32,93 @@ function normalizeToken(raw) {
 export class ZedCloudClient {
     baseUrl;
     version;
+    cachedJwt = null;
+    cachedJwtExp = 0;
     constructor(baseUrl = ZED_ENDPOINT, version = ZED_VERSION) {
         this.baseUrl = baseUrl.replace(/\/$/, "");
         this.version = version;
+    }
+    async resolveJwt(creds) {
+        const rawAccess = creds.accessToken?.trim() || "";
+        const normalized = normalizeToken(rawAccess);
+        // 1. If it's already a JWT, use it if not expired
+        if (isJwt(normalized)) {
+            const exp = decodeJwtExp(normalized);
+            // If we have expiry and it's still valid for >5min, use it
+            if (exp && Date.now() + 5 * 60 * 1000 < exp) {
+                return normalized;
+            }
+            // If no expiry or expiring soon, still try to use it – server will tell us if 401
+            // But if we also have a cached fresh JWT, prefer it
+            if (this.cachedJwt && Date.now() + 5 * 60 * 1000 < this.cachedJwtExp) {
+                return this.cachedJwt;
+            }
+            // If JWT is present but we have userId + secret that could refresh, try refresh
+            // Fall through to exchange attempt if we have userId
+            if (!creds.userId) {
+                return normalized;
+            }
+        }
+        // 2. Return cached JWT if still valid
+        if (this.cachedJwt && Date.now() + 5 * 60 * 1000 < this.cachedJwtExp) {
+            return this.cachedJwt;
+        }
+        // 3. Try to exchange access token (secret JSON) for JWT
+        const userId = creds.userId?.trim();
+        // The secret JSON is the raw accessToken value when it's not a JWT
+        // It typically starts with { and contains version field
+        const secretJson = rawAccess;
+        if (userId && secretJson && secretJson.trim().startsWith("{")) {
+            try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 15000);
+                const resp = await fetch("https://cloud.zed.dev/client/llm_tokens", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `${userId} ${secretJson}`,
+                    },
+                    body: "{}",
+                    signal: controller.signal,
+                }).finally(() => clearTimeout(timeout));
+                if (resp.ok) {
+                    const data = (await resp.json());
+                    if (data.token) {
+                        const jwt = normalizeToken(data.token);
+                        const exp = decodeJwtExp(jwt);
+                        this.cachedJwt = jwt;
+                        this.cachedJwtExp = exp || Date.now() + 55 * 60 * 1000;
+                        return jwt;
+                    }
+                }
+                else {
+                    const text = await resp.text().catch(() => "");
+                    // If exchange fails, fall through to try raw token as Bearer
+                    // but provide clear error if raw token is not JWT
+                    if (!isJwt(normalized)) {
+                        throw new Error(`JWT exchange failed (${resp.status}): ${text}`);
+                    }
+                }
+            }
+            catch (e) {
+                if (!isJwt(normalized)) {
+                    throw new Error(`Failed to exchange Zed access token for JWT. Please run /zed login again. ${e instanceof Error ? e.message : String(e)}`);
+                }
+                // If raw token is JWT, ignore exchange failure and use it
+            }
+        }
+        // 4. Fallback: use normalized token if it looks like JWT or non-empty
+        if (normalized) {
+            // If it's not a JWT but we have no userId to exchange, we still try – server will give clear 401
+            return normalized;
+        }
+        throw new Error("No valid Zed JWT available. Please run /zed login.");
     }
     /**
      * Builds request headers with appropriate auth credentials.
      * Zed expects Bearer JWT plus Zed version headers.
      */
-    buildHeaders(creds) {
-        const token = normalizeToken(creds.accessToken);
+    buildHeadersWithJwt(jwt, sessionCookie) {
         const headers = {
             "Content-Type": "application/json",
             "Accept": "*/*",
@@ -30,13 +127,13 @@ export class ZedCloudClient {
             "X-Zed-Client-Supports-Status-Messages": "true",
             "X-Zed-Client-Supports-Stream-Ended-Request-Completion-Status": "true",
         };
-        if (token) {
-            headers["Authorization"] = `Bearer ${token}`;
+        if (jwt) {
+            headers["Authorization"] = `Bearer ${jwt}`;
         }
-        if (creds.sessionCookie) {
-            headers["Cookie"] = creds.sessionCookie.startsWith("zed.session=")
-                ? creds.sessionCookie
-                : `zed.session=${creds.sessionCookie}`;
+        if (sessionCookie) {
+            headers["Cookie"] = sessionCookie.startsWith("zed.session=")
+                ? sessionCookie
+                : `zed.session=${sessionCookie}`;
         }
         return headers;
     }
@@ -52,17 +149,56 @@ export class ZedCloudClient {
      */
     async *streamCompletion(req, creds, signal) {
         const url = this.baseUrl; // already is https://cloud.zed.dev/completions
-        const headers = this.buildHeaders(creds);
+        let jwt;
+        try {
+            jwt = await this.resolveJwt(creds);
+        }
+        catch (e) {
+            throw new Error(e instanceof Error ? e.message : String(e));
+        }
+        const headers = this.buildHeadersWithJwt(jwt, creds.sessionCookie);
         // The token is required; fail fast with clear message
         if (!headers["Authorization"]) {
             throw new Error("Zed Authentication Failed: No access token found. Please run /zed login.");
         }
-        const response = await fetch(url, {
+        const effectiveSignal = signal || AbortSignal.timeout(60000);
+        let response = await fetch(url, {
             method: "POST",
             headers,
             body: JSON.stringify(req),
-            signal,
+            signal: effectiveSignal,
         });
+        // Retry once on 401 if we can refresh JWT (cached or exchangeable)
+        if (!response.ok && response.status === 401) {
+            const wasJwt = isJwt(jwt);
+            const canRefresh = Boolean(this.cachedJwt || (creds.userId && creds.accessToken?.trim().startsWith("{")));
+            if (canRefresh) {
+                // Invalidate cache and try to get fresh JWT
+                this.cachedJwt = null;
+                this.cachedJwtExp = 0;
+                try {
+                    const freshJwt = await this.resolveJwt(creds);
+                    if (freshJwt && freshJwt !== jwt) {
+                        const retryHeaders = this.buildHeadersWithJwt(freshJwt, creds.sessionCookie);
+                        const retrySignal = signal || AbortSignal.timeout(60000);
+                        const retryResp = await fetch(url, {
+                            method: "POST",
+                            headers: retryHeaders,
+                            body: JSON.stringify(req),
+                            signal: retrySignal,
+                        });
+                        // Use retry response for further handling (whether ok or not)
+                        response = retryResp;
+                        jwt = freshJwt;
+                    }
+                }
+                catch {
+                    // ignore refresh failure, proceed to error handling with original response
+                }
+            }
+            // If still 401 after retry, fall through to throw
+            void wasJwt;
+        }
         if (!response.ok) {
             const errorText = await response.text().catch(() => "Unknown error");
             let detail = errorText;
