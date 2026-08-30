@@ -26,13 +26,13 @@ describe("Credential store", () => {
       githubUsername: "testuser",
     });
 
-    const loaded = loadCredentials();
+    const loaded = loadCredentials({ skipSystem: true });
     expect(loaded).not.toBeNull();
     expect(loaded?.accessToken).toBe("test_token_12345");
     expect(loaded?.githubUsername).toBe("testuser");
 
     clearCredentials();
-    const afterClear = loadCredentials();
+    const afterClear = loadCredentials({ skipSystem: true });
     expect(afterClear).toBeNull();
   });
   it("prioritizes environment variables when set", () => {
@@ -44,18 +44,18 @@ describe("Credential store", () => {
     expect(loaded?.source).toBe("env");
   });
 
-  it("respects loggedOut state until new credentials are saved", () => {
+  it("clears credentials and handles re-saving", () => {
     saveCredentials({
       accessToken: "first_token",
     });
-    expect(loadCredentials()?.accessToken).toBe("first_token");
+    expect(loadCredentials({ skipSystem: true })?.accessToken).toBe("first_token");
 
     clearCredentials();
-    expect(loadCredentials()).toBeNull();
+    expect(loadCredentials({ skipSystem: true })).toBeNull();
 
     saveCredentials({
       accessToken: "second_token",
     });
-    expect(loadCredentials()?.accessToken).toBe("second_token");
+    expect(loadCredentials({ skipSystem: true })?.accessToken).toBe("second_token");
   });
 });

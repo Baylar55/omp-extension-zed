@@ -244,10 +244,7 @@ export function loadCredentials(options?: LoadCredentialsOptions): ZedCredential
     if (fs.existsSync(filePath)) {
       const raw = fs.readFileSync(filePath, "utf-8");
       const parsed = JSON.parse(raw) as ZedCredentials;
-      if (parsed.loggedOut) {
-        return null;
-      }
-      if (parsed.accessToken || parsed.sessionCookie) {
+      if (!parsed.loggedOut && (parsed.accessToken || parsed.sessionCookie)) {
         fileCreds = {
           ...parsed,
           source: parsed.source || "file",
@@ -317,15 +314,7 @@ export function saveCredentials(creds: Partial<ZedCredentials>): void {
  * Clears stored credentials and marks state as logged out.
  */
 export function clearCredentials(): boolean {
-  const filePath = getCredentialsFilePath();
-  try {
-    const dir = getOmpAgentDir();
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify({ loggedOut: true, savedAt: Date.now() }, null, 2), "utf-8");
-    return true;
-  } catch {
-    return false;
-  }
+  return deleteCredentialsFile();
 }
 
 /**
@@ -336,12 +325,11 @@ export function deleteCredentialsFile(): boolean {
   try {
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
-      return true;
     }
+    return true;
   } catch {
-    // Ignore
+    return false;
   }
-  return false;
 }
 
 /**

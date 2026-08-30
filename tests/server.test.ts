@@ -1,12 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { startBridgeServer, type BridgeServerInstance } from "../src/bridge/server.js";
-import { clearCredentials } from "../src/auth/credential-store.js";
+import * as credStore from "../src/auth/credential-store.js";
 
 describe("Bridge HTTP Server", () => {
   let bridge: BridgeServerInstance;
 
   beforeAll(async () => {
-    clearCredentials();
+    credStore.clearCredentials();
     bridge = await startBridgeServer(0);
   });
 
@@ -34,26 +34,23 @@ describe("Bridge HTTP Server", () => {
   });
 
   it("rejects unauthorized completions request without credentials", async () => {
-    // Ensure no credentials leak from parallel integration tests
-    clearCredentials();
-    delete process.env["ZED_AUTH_TOKEN"];
-    delete process.env["ZED_TOKEN"];
-    delete process.env["ZED_ACCESS_TOKEN"];
-    // Small delay to let FS settle if another test just wrote
-    await new Promise((r) => setTimeout(r, 10));
-    clearCredentials();
+    const spy = vi.spyOn(credStore, "loadCredentials").mockReturnValue(null);
 
-    const res = await fetch(`http://127.0.0.1:${bridge.port}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "zed/claude-sonnet-4-6",
-        messages: [{ role: "user", content: "Hello" }],
-      }),
-    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${bridge.port}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "zed/claude-sonnet-4-6",
+          messages: [{ role: "user", content: "Hello" }],
+        }),
+      });
 
-    expect(res.status).toBe(401);
-    const data = await res.json();
-    expect(data.error.code).toBe("unauthorized");
+      expect(res.status).toBe(401);
+      const data = await res.json();
+      expect(data.error.code).toBe("unauthorized");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
