@@ -98,17 +98,20 @@ export interface ZedAssistantRequest {
   model: string;
   provider_request: {
     model: string;
-    max_tokens: number;
-    messages: Array<{
+    stream?: boolean;
+    max_tokens?: number;
+    max_output_tokens?: number;
+    messages?: Array<{
       role: string;
       content: unknown[];
     }>;
-    tools?: Array<{
-      name: string;
-      description?: string;
-      input_schema: unknown;
-    }>;
-    system: string;
+    input?: Array<unknown>;
+    contents?: Array<unknown>;
+    tools?: unknown[];
+    system?: string;
+    instructions?: string;
+    systemInstruction?: unknown;
+    [key: string]: unknown;
   };
   system: string;
   temperature: number;

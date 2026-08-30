@@ -90,6 +90,34 @@ export function getLocalSpendHistory(): LocalSpendRecord {
   };
 }
 
+export function resetLocalSpendHistory(): void {
+  const currentPeriod = new Date().toISOString().slice(0, 7);
+  const emptyRecord: LocalSpendRecord = {
+    period: currentPeriod,
+    spentAmount: 0.0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    requestCount: 0,
+    lastUpdated: Date.now(),
+  };
+  try {
+    const dir = getOmpAgentDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(getUsageHistoryPath(), JSON.stringify(emptyRecord, null, 2), "utf-8");
+  } catch {}
+}
+
+export function setLocalSpendAmount(amount: number): void {
+  const current = getLocalSpendHistory();
+  current.spentAmount = Math.max(0, Number(amount.toFixed(2)));
+  current.lastUpdated = Date.now();
+  try {
+    const dir = getOmpAgentDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(getUsageHistoryPath(), JSON.stringify(current, null, 2), "utf-8");
+  } catch {}
+}
+
 export function recordTokenUsage(model: string, inputTokens: number, outputTokens: number): void {
   const cost = calculateModelCost(model, inputTokens, outputTokens);
   const current = getLocalSpendHistory();
@@ -107,7 +135,6 @@ export function recordTokenUsage(model: string, inputTokens: number, outputToken
     // Ignore save errors
   }
 }
-
 export interface ZedUsageReport {
   planName: string;
   monthlyCredit: number;
@@ -167,35 +194,52 @@ export async function fetchZedUsage(creds: ZedCredentials | null | undefined): P
 
         if (res.ok) {
           const data = (await res.json()) as Record<string, unknown>;
-          const rawLimit = data["credit_limit"] ?? data["limit"] ?? (data["usage"] as Record<string, unknown> | undefined)?.["limit"];
-          const monthlyCredit = typeof rawLimit === "number" ? (rawLimit > 100 ? rawLimit / 100 : rawLimit) : 10.0;
+          const currentUsage = (data["current_usage"] as Record<string, unknown> | undefined) || {};
+          const tokenSpend = (currentUsage["token_spend"] as Record<string, unknown> | undefined) || {};
+          const editPred = (currentUsage["edit_predictions"] as Record<string, unknown> | undefined) || {};
 
-          let spentAmount = 0.0;
-          if (typeof data["token_spend_cents"] === "number") {
-            spentAmount = data["token_spend_cents"] / 100;
-          } else if (typeof data["current_spend_cents"] === "number") {
-            spentAmount = data["current_spend_cents"] / 100;
-          } else if (typeof data["current_spend"] === "number") {
-            spentAmount = data["current_spend"] > 100 && monthlyCredit <= 100 ? data["current_spend"] / 100 : data["current_spend"];
-          } else if (typeof data["spent"] === "number") {
-            spentAmount = data["spent"] > 100 && monthlyCredit <= 100 ? data["spent"] / 100 : data["spent"];
-          } else if (typeof data["spend"] === "number") {
-            spentAmount = data["spend"];
-          } else if (typeof (data["usage"] as Record<string, unknown> | undefined)?.["spent"] === "number") {
-            spentAmount = (data["usage"] as Record<string, unknown>)["spent"] as number;
+          const planRaw = (data["plan"] as string | undefined) || "";
+          const planName = normalizePlanName(planRaw);
+          const isStudent = planName.toLowerCase().includes("student") || planRaw.toLowerCase().includes("student");
+          const isFree = planName.toLowerCase().includes("free") || planRaw.toLowerCase().includes("free");
+
+          let monthlyCredit = isStudent ? 5.0 : isFree ? 0.0 : 10.0;
+          if (typeof tokenSpend["limit_in_cents"] === "number") {
+            monthlyCredit = Number((tokenSpend["limit_in_cents"] / 100).toFixed(2));
+          } else if (typeof data["credit_limit"] === "number") {
+            monthlyCredit = typeof data["credit_limit"] === "number" && data["credit_limit"] > 100 ? Number((data["credit_limit"] / 100).toFixed(2)) : Number(data["credit_limit"].toFixed(2));
           }
 
-          const remainingCredit = Math.max(0, Number((monthlyCredit - spentAmount).toFixed(2)));
-          const spentPercentage = Math.min(100, Math.round((spentAmount / monthlyCredit) * 100));
+          let spentAmount = 0.0;
+          if (typeof tokenSpend["spend_in_cents"] === "number") {
+            spentAmount = Number((tokenSpend["spend_in_cents"] / 100).toFixed(2));
+          } else if (typeof data["token_spend_cents"] === "number") {
+            spentAmount = Number((data["token_spend_cents"] / 100).toFixed(2));
+          } else if (typeof data["current_spend_cents"] === "number") {
+            spentAmount = Number((data["current_spend_cents"] / 100).toFixed(2));
+          } else if (typeof data["current_spend"] === "number") {
+            spentAmount = data["current_spend"] > 100 && monthlyCredit <= 100 ? Number((data["current_spend"] / 100).toFixed(2)) : Number(data["current_spend"].toFixed(2));
+          } else if (typeof data["spent"] === "number") {
+            spentAmount = data["spent"] > 100 && monthlyCredit <= 100 ? Number((data["spent"] / 100).toFixed(2)) : Number(data["spent"].toFixed(2));
+          } else if (typeof data["spend"] === "number") {
+            spentAmount = Number(data["spend"].toFixed(2));
+          }
+
+          let remainingCredit = Math.max(0, Number((monthlyCredit - spentAmount).toFixed(2)));
+          if (typeof tokenSpend["remaining_in_cents"] === "number") {
+            remainingCredit = Number((tokenSpend["remaining_in_cents"] / 100).toFixed(2));
+          }
+          const spentPercentage = monthlyCredit > 0 ? Math.min(100, Math.round((spentAmount / monthlyCredit) * 100)) : 0;
           const resetDate = (data["period_end"] || data["period_end_date"] || data["resets_at"]) as string | undefined;
 
           return {
-            planName: normalizePlanName(data["plan"] as string | undefined),
+            planName,
             monthlyCredit,
             spentAmount,
             remainingCredit,
             spentPercentage,
             resetDate,
+            editPredictions: editPred ? { used: typeof editPred["used"] === "number" ? editPred["used"] : 0, limit: editPred["limit"] === null ? "unlimited" : String(editPred["limit"] ?? "unlimited") } : undefined,
             hasDetailedBilling: true,
             raw: data,
           };
@@ -205,6 +249,7 @@ export async function fetchZedUsage(creds: ZedCredentials | null | undefined): P
       }
     }
   }
+
   // 2. Try Client User Endpoint if access token is present
   if (creds.accessToken) {
     let userId = creds.userId;
@@ -256,6 +301,9 @@ export async function fetchZedUsage(creds: ZedCredentials | null | undefined): P
             // Format clean plan name
             const rawPlan = (planObj["plan_v3"] || orgPlan || planObj["plan_v2"] || planObj["plan"] || user["plan"]) as string | undefined;
             const planName = normalizePlanName(rawPlan || (user["is_pro"] ? "pro" : undefined));
+            const isStudent = planName.toLowerCase().includes("student") || (rawPlan && rawPlan.toLowerCase().includes("student"));
+            const isFree = planName.toLowerCase().includes("free") || (rawPlan && rawPlan.toLowerCase().includes("free"));
+            const monthlyCredit = isStudent ? 5.0 : isFree ? 0.0 : 10.0;
 
             const username = (user["github_login"] || user["username"] || user["name"] || creds.githubUsername) as string | undefined;
             const subPeriod = planObj["subscription_period"] as Record<string, unknown> | undefined;
@@ -266,10 +314,9 @@ export async function fetchZedUsage(creds: ZedCredentials | null | undefined): P
             const editPred = usageObj?.["edit_predictions"] as { used: number; limit: unknown } | undefined;
 
             const localSpend = getLocalSpendHistory();
-            const spentAmount = localSpend.spentAmount;
-            const monthlyCredit = 10.0;
+            const spentAmount = localSpend.spentAmount > monthlyCredit && monthlyCredit > 0 ? monthlyCredit : Number(localSpend.spentAmount.toFixed(2));
             const remainingCredit = Math.max(0, Number((monthlyCredit - spentAmount).toFixed(2)));
-            const spentPercentage = Math.min(100, Math.round((spentAmount / monthlyCredit) * 100));
+            const spentPercentage = monthlyCredit > 0 ? Math.min(100, Math.round((spentAmount / monthlyCredit) * 100)) : 0;
 
             return {
               planName,
@@ -296,10 +343,10 @@ export async function fetchZedUsage(creds: ZedCredentials | null | undefined): P
   // 3. Fallback: if we have any valid credentials, return a baseline active report
   if (creds.accessToken || creds.sessionCookie) {
     const localSpend = getLocalSpendHistory();
-    const spentAmount = localSpend.spentAmount;
-    const monthlyCredit = 10.0;
+    const monthlyCredit = 5.0;
+    const spentAmount = Math.min(monthlyCredit, Number(localSpend.spentAmount.toFixed(2)));
     const remainingCredit = Math.max(0, Number((monthlyCredit - spentAmount).toFixed(2)));
-    const spentPercentage = Math.min(100, Math.round((spentAmount / monthlyCredit) * 100));
+    const spentPercentage = monthlyCredit > 0 ? Math.min(100, Math.round((spentAmount / monthlyCredit) * 100)) : 0;
 
     return {
       planName: "Zed Student Plan",
@@ -315,7 +362,6 @@ export async function fetchZedUsage(creds: ZedCredentials | null | undefined): P
 
   return null;
 }
-
 /**
  * Formats a user-friendly string summary of the usage report for TUI display.
  */
@@ -360,13 +406,16 @@ export function formatUsageSummary(report: ZedUsageReport | null): string {
   }
 
   if (report.hasDetailedBilling) {
-    lines.push(`Source:        ✓ Live Orb Sync (dashboard.zed.dev)`);
+    lines.push(`Source:        ✓ Live Dashboard Sync (dashboard.zed.dev)`);
   } else {
     lines.push(
-      `\n💡 To sync live dollar spend ($0.50) directly from dashboard.zed.dev:`,
+      `Source:        Local Extension Estimate`,
+      `\n💡 To sync live dollar spend directly from dashboard.zed.dev:`,
       `1. Open https://dashboard.zed.dev in your browser`,
-      `2. Press F12 → Application/Storage → Cookies → copy 'zed.session'`,
+      `2. Press F12 → Application → Cookies → copy 'zed.session'`,
       `3. Run: /zed set-cookie <your_zed.session_cookie>`,
+      `• Or manually set your current spend: /zed set-spend 0.53`,
+      `• Or reset session spend count: /zed reset-usage`,
     );
   }
   return lines.join("\n");

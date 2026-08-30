@@ -16,6 +16,8 @@ export interface LocalSpendRecord {
     lastUpdated: number;
 }
 export declare function getLocalSpendHistory(): LocalSpendRecord;
+export declare function resetLocalSpendHistory(): void;
+export declare function setLocalSpendAmount(amount: number): void;
 export declare function recordTokenUsage(model: string, inputTokens: number, outputTokens: number): void;
 export interface ZedUsageReport {
     planName: string;

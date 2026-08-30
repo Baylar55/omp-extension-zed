@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { calculateModelCost, fetchZedUsage, formatUsageSummary, getLocalSpendHistory, recordTokenUsage, type ZedUsageReport } from "../src/usage/tracker.js";
-
+import { calculateModelCost, fetchZedUsage, formatUsageSummary, getLocalSpendHistory, recordTokenUsage, resetLocalSpendHistory, setLocalSpendAmount, type ZedUsageReport } from "../src/usage/tracker.js";
 describe("Usage Tracker", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -128,5 +127,52 @@ describe("Usage Tracker", () => {
     expect(after.totalInputTokens).toBe(before.totalInputTokens + 50_000);
     expect(after.totalOutputTokens).toBe(before.totalOutputTokens + 10_000);
     expect(after.spentAmount).toBeGreaterThanOrEqual(before.spentAmount);
+  });
+
+  it("parses live frontend/billing/usage token_spend and edit_predictions", async () => {
+    const mockBillingResponse = {
+      plan: "zed_student",
+      is_account_too_young: false,
+      current_usage: {
+        token_spend: {
+          spend_in_cents: 53,
+          limit_in_cents: 500,
+          remaining_in_cents: 447,
+        },
+        edit_predictions: {
+          used: 0,
+          limit: null,
+          remaining: null,
+        },
+      },
+      portal_url: null,
+    };
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockBillingResponse,
+    } as Response);
+
+    const report = await fetchZedUsage({
+      sessionCookie: "test_cookie",
+    });
+
+    expect(report).not.toBeNull();
+    expect(report?.planName).toBe("Zed Student Plan");
+    expect(report?.spentAmount).toBe(0.53);
+    expect(report?.monthlyCredit).toBe(5.0);
+    expect(report?.remainingCredit).toBe(4.47);
+    expect(report?.hasDetailedBilling).toBe(true);
+    expect(report?.editPredictions?.limit).toBe("unlimited");
+  });
+
+  it("sets and resets local spend amount", () => {
+    setLocalSpendAmount(0.53);
+    let hist = getLocalSpendHistory();
+    expect(hist.spentAmount).toBe(0.53);
+
+    resetLocalSpendHistory();
+    hist = getLocalSpendHistory();
+    expect(hist.spentAmount).toBe(0.0);
   });
 });

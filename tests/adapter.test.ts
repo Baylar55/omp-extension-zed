@@ -12,8 +12,8 @@ import type { OpenAIChatRequest } from "../src/bridge/types.js";
 describe("Adapter utilities", () => {
   it("normalizes model IDs correctly", () => {
     expect(normalizeModelId("zed/claude-sonnet-5")).toBe("claude-sonnet-5");
-    expect(normalizeModelId("zed/claude-sonnet-4-6")).toBe("claude-sonnet-4.6");
-    expect(normalizeModelId("claude-sonnet-4-5")).toBe("claude-sonnet-4.5");
+    expect(normalizeModelId("zed/claude-sonnet-4-6")).toBe("claude-sonnet-4-6");
+    expect(normalizeModelId("claude-sonnet-4-5")).toBe("claude-sonnet-4-5");
     expect(normalizeModelId("gpt-5.6-sol")).toBe("gpt-5.6-sol");
     expect(normalizeModelId("gpt-5-6-terra")).toBe("gpt-5.6-terra");
     expect(normalizeModelId("gpt-5.4")).toBe("gpt-5.4");
@@ -42,7 +42,7 @@ describe("Adapter utilities", () => {
     expect(extractTextContent(undefined)).toBe("");
   });
 
-  it("adapts OpenAI chat requests into Zed assistant format", () => {
+  it("adapts Anthropic chat requests into Zed assistant format", () => {
     const req: OpenAIChatRequest = {
       model: "zed/claude-sonnet-4-6",
       messages: [
@@ -67,18 +67,18 @@ describe("Adapter utilities", () => {
 
     const zedReq = adaptOpenAIToZed(req);
 
-    expect(zedReq.model).toBe("claude-sonnet-4.6");
+    expect(zedReq.model).toBe("claude-sonnet-4-6");
     expect(zedReq.provider).toBe("anthropic");
     expect(zedReq.intent).toBe("user_prompt");
     expect(zedReq.thread_id).toBeDefined();
     expect(zedReq.prompt_id).toBeDefined();
     expect(zedReq.temperature).toBe(0.7);
     expect(zedReq.system).toContain("You are a helpful assistant.");
-    expect(zedReq.provider_request.model).toBe("claude-sonnet-4.6");
+    expect(zedReq.provider_request.model).toBe("claude-sonnet-4-6");
+    expect(zedReq.provider_request.stream).toBe(true);
     expect(zedReq.provider_request.system).toContain("You are a helpful assistant.");
-    // system message is extracted, so provider_request.messages has 3 entries (user, assistant, tool_result)
-    expect(zedReq.provider_request.messages.length).toBe(3);
-    const [userMsg, assistantMsg, toolResultMsg] = zedReq.provider_request.messages;
+    expect(zedReq.provider_request.messages?.length).toBe(3);
+    const [userMsg, assistantMsg, toolResultMsg] = zedReq.provider_request.messages!;
     expect(userMsg.role).toBe("user");
     expect((userMsg.content as Array<{ type: string; text: string }>)[0].text).toBe("Write a quicksort in Python");
     expect(assistantMsg.role).toBe("assistant");
@@ -88,6 +88,63 @@ describe("Adapter utilities", () => {
     const toolResultBlock = (toolResultMsg.content as Array<{ type: string }>)[0] as { type: string; tool_use_id: string };
     expect(toolResultBlock.type).toBe("tool_result");
     expect(toolResultBlock.tool_use_id).toBe("call_123");
+  });
+
+  it("adapts OpenAI chat requests into Responses API format", () => {
+    const req: OpenAIChatRequest = {
+      model: "zed/gpt-5.6-sol",
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: "What is the capital of France?" },
+        {
+          role: "assistant",
+          content: "Let me check.",
+          tool_calls: [
+            {
+              id: "call_abc",
+              type: "function",
+              function: { name: "search", arguments: '{"q": "capital of France"}' },
+            },
+          ],
+        },
+        { role: "tool", tool_call_id: "call_abc", content: "Paris" },
+      ],
+      stream: true,
+    };
+
+    const zedReq = adaptOpenAIToZed(req);
+    expect(zedReq.model).toBe("gpt-5.6-sol");
+    expect(zedReq.provider).toBe("open_ai");
+    expect(zedReq.provider_request.stream).toBe(true);
+    expect(zedReq.provider_request.instructions).toContain("You are a helpful assistant.");
+    expect(Array.isArray(zedReq.provider_request.input)).toBe(true);
+    const input = zedReq.provider_request.input as Array<{ type: string; role?: string; call_id?: string }>;
+    expect(input.length).toBe(4);
+    expect(input[0].type).toBe("message");
+    expect(input[0].role).toBe("user");
+    expect(input[1].type).toBe("message");
+    expect(input[1].role).toBe("assistant");
+    expect(input[2].type).toBe("function_call");
+    expect(input[2].call_id).toBe("call_abc");
+    expect(input[3].type).toBe("function_call_output");
+    expect(input[3].call_id).toBe("call_abc");
+  });
+
+  it("adapts Google chat requests into Gemini contents format", () => {
+    const req: OpenAIChatRequest = {
+      model: "zed/gemini-3.5-flash",
+      messages: [
+        { role: "system", content: "You are a helpful assistant." },
+        { role: "user", content: "Hello Gemini" },
+      ],
+      stream: true,
+    };
+
+    const zedReq = adaptOpenAIToZed(req);
+    expect(zedReq.model).toBe("gemini-3.5-flash");
+    expect(zedReq.provider).toBe("google");
+    expect(zedReq.provider_request.stream).toBe(true);
+    expect(Array.isArray(zedReq.provider_request.contents)).toBe(true);
   });
 
   it("creates valid OpenAI SSE data chunks", () => {

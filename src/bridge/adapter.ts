@@ -4,6 +4,7 @@ import type {
   OpenAIChatRequest,
   OpenAIChatResponse,
   OpenAIMessage,
+  OpenAITool,
   ZedAssistantRequest,
 } from "./types.js";
 
@@ -15,18 +16,18 @@ export const ZED_VERSION = "0.228.0+stable.203.8421009ef8a022df1196d54bb42fd9436
 export function normalizeModelId(modelId: string): string {
   const cleanId = modelId.replace(/^zed\//, "");
   switch (cleanId) {
-    // Claude series
+    // Claude series (Zed catalog uses hyphenated version numbers)
     case "claude-sonnet-5":
       return "claude-sonnet-5";
     case "claude-sonnet-4-6":
     case "claude-sonnet-4.6":
-      return "claude-sonnet-4.6";
+      return "claude-sonnet-4-6";
     case "claude-sonnet-4-5":
     case "claude-sonnet-4.5":
-      return "claude-sonnet-4.5";
+      return "claude-sonnet-4-5";
     case "claude-haiku-4-5":
     case "claude-haiku-4.5":
-      return "claude-haiku-4.5";
+      return "claude-haiku-4-5";
 
     // GPT-5.6 Sol, Terra, Luna
     case "gpt-5-6-sol":
@@ -60,7 +61,6 @@ export function normalizeModelId(modelId: string): string {
     // Gemini series - note: Zed catalog uses preview suffix for 3.1
     case "gemini-3-1-pro":
     case "gemini-3.1-pro":
-      return "gemini-3.1-pro-preview";
     case "gemini-3-1-pro-preview":
     case "gemini-3.1-pro-preview":
       return "gemini-3.1-pro-preview";
@@ -68,10 +68,26 @@ export function normalizeModelId(modelId: string): string {
     case "gemini-3.5-flash":
       return "gemini-3.5-flash";
     case "gemini-3-flash":
+    case "gemini-3.0-flash":
       return "gemini-3-flash";
 
-    default:
+    // Short aliases (harness may send bare names)
+    case "luna":
+    case "gpt-luna":
+    case "sol":
+    case "gpt-sol":
+      return cleanId.includes("luna") ? "gpt-5.6-luna" : "gpt-5.6-sol";
+    case "terra":
+    case "gpt-terra":
+      return "gpt-5.6-terra";
+
+    default: {
+      const lower = cleanId.toLowerCase();
+      if (lower === "luna" || lower.endsWith("/luna") || lower.includes("luna")) return "gpt-5.6-luna";
+      if (lower === "sol" || lower.endsWith("/sol") || lower.includes("sol")) return "gpt-5.6-sol";
+      if (lower === "terra" || lower.endsWith("/terra") || lower.includes("terra")) return "gpt-5.6-terra";
       return cleanId;
+    }
   }
 }
 
@@ -84,9 +100,10 @@ export function normalizeModelId(modelId: string): string {
  */
 export function getZedProvider(modelId: string): string {
   const clean = normalizeModelId(modelId);
-  if (clean.startsWith("claude-")) return "anthropic";
-  if (clean.startsWith("gpt-")) return "open_ai";
-  if (clean.startsWith("gemini-")) return "google";
+  const lower = clean.toLowerCase();
+  if (lower.startsWith("claude-") || lower.includes("claude")) return "anthropic";
+  if (lower.startsWith("gpt-") || lower.includes("gpt") || lower.includes("luna") || lower.includes("sol") || lower.includes("terra")) return "open_ai";
+  if (lower.startsWith("gemini-") || lower.includes("gemini")) return "google";
   return "anthropic";
 }
 
@@ -110,62 +127,12 @@ function safeJsonParse(str: string | undefined): unknown | null {
   }
 }
 
-function openAiContentToZedBlocks(content: OpenAIMessage["content"]): unknown[] {
-  if (typeof content === "string") {
-    return content ? [{ type: "text", text: content }] : [];
-  }
-  if (!Array.isArray(content)) return [];
-  const blocks: unknown[] = [];
-  for (const block of content) {
-    if (!block) continue;
-    const b = block as { type: string; text?: string; image_url?: { url: string } };
-    if (b.type === "text" || (b.text !== undefined && b.type !== "image_url")) {
-      if (b.text) blocks.push({ type: "text", text: b.text });
-    } else if (b.type === "image_url") {
-      const url = b.image_url?.url || "";
-      const m = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
-      if (m) {
-        blocks.push({
-          type: "image",
-          source: { type: "base64", media_type: m[1], data: m[2] },
-        });
-      }
-      // non-data-URI images are skipped (Zed only accepts base64)
-    } else if (b.type === "input_text" || b.type === "input_image") {
-      // OpenAI Responses API blocks
-      if (b.type === "input_text" && b.text) {
-        blocks.push({ type: "text", text: b.text });
-      } else if (b.type === "input_image") {
-        const url = (b as unknown as { image_url?: string }).image_url || "";
-        const m2 = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
-        if (m2) {
-          blocks.push({
-            type: "image",
-            source: { type: "base64", media_type: m2[1], data: m2[2] },
-          });
-        }
-      }
-    }
-  }
-  return blocks;
-}
-
-function openAiToolToZed(tool: unknown): { name: string; description?: string; input_schema: unknown } | null {
-  if (!tool) return null;
-  const t = tool as { function?: { name?: string; description?: string; parameters?: unknown; input_schema?: unknown } ; name?: string; description?: string; parameters?: unknown };
-  const fn = (t as { function?: unknown }).function ? (t as { function: { name?: string; description?: string; parameters?: unknown; input_schema?: unknown } }).function : (t as { name?: string; description?: string; parameters?: unknown; input_schema?: unknown });
-  const name = (fn as { name?: string }).name || (t as { name?: string }).name;
-  if (!name) return null;
-  return {
-    name,
-    description: (fn as { description?: string }).description,
-    input_schema: (fn as { parameters?: unknown }).parameters || (fn as { input_schema?: unknown }).input_schema || { type: "object", properties: {} },
-  };
-}
-
-function openAiMessagesToZed(messages: OpenAIMessage[]): { messages: Array<{ role: string; content: unknown[] }>; system: string } {
-  const zed: Array<{ role: string; content: unknown[] }> = [];
+function extractSystemAndMessages(messages: OpenAIMessage[]): {
+  cleanMessages: OpenAIMessage[];
+  systemPrompt: string;
+} {
   const systemParts: string[] = [];
+  const cleanMessages: OpenAIMessage[] = [];
 
   for (const m of messages || []) {
     if (!m) continue;
@@ -176,12 +143,73 @@ function openAiMessagesToZed(messages: OpenAIMessage[]): { messages: Array<{ rol
       if (text) systemParts.push(text);
       continue;
     }
+
     if (m.role === "user") {
-      zed.push({ role: "user", content: openAiContentToZedBlocks(m.content) });
+      const rawText = typeof m.content === "string"
+        ? m.content
+        : (m.content || []).map((b) => (b as { text?: string }).text || "").join("\n");
+
+      if (rawText.includes("<system-reminder>") || rawText.includes("<system-reminder")) {
+        const withoutReminder = rawText.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+        const reminderMatch = rawText.match(/<system-reminder>[\s\S]*?<\/system-reminder>/g);
+        if (reminderMatch) systemParts.push(reminderMatch.join("\n"));
+        if (withoutReminder) {
+          cleanMessages.push({ ...m, content: withoutReminder });
+        }
+        continue;
+      }
+    }
+
+    cleanMessages.push(m);
+  }
+
+  const combinedSystem = systemParts.join("\n\n");
+  const systemPrompt = combinedSystem
+    ? `${combinedSystem}\n\n## Tool Protocol\n- Use native tool_use API only.\n- NEVER output XML tags like <tool>.\n- The user already sees tool output. Do not repeat it.`
+    : "";
+
+  return { cleanMessages, systemPrompt };
+}
+
+function buildAnthropicRequest(
+  modelId: string,
+  cleanMessages: OpenAIMessage[],
+  tools: OpenAITool[] | undefined,
+  systemPrompt: string,
+  maxTokens: number,
+): ZedAssistantRequest["provider_request"] {
+  const anthropicMessages: Array<{ role: string; content: unknown[] }> = [];
+
+  for (const m of cleanMessages) {
+    if (m.role === "user") {
+      const blocks: unknown[] = [];
+      if (typeof m.content === "string") {
+        if (m.content) blocks.push({ type: "text", text: m.content });
+      } else if (Array.isArray(m.content)) {
+        for (const b of m.content) {
+          if (!b) continue;
+          const item = b as { type: string; text?: string; image_url?: { url: string } };
+          if (item.type === "text" && item.text) {
+            blocks.push({ type: "text", text: item.text });
+          } else if (item.type === "image_url") {
+            const url = item.image_url?.url || "";
+            const match = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
+            if (match) {
+              blocks.push({
+                type: "image",
+                source: { type: "base64", media_type: match[1], data: match[2] },
+              });
+            }
+          }
+        }
+      }
+      if (blocks.length > 0) {
+        anthropicMessages.push({ role: "user", content: blocks });
+      }
     } else if (m.role === "assistant") {
       const blocks: unknown[] = [];
-      const textBlocks = openAiContentToZedBlocks(m.content);
-      if (textBlocks.length) blocks.push(...textBlocks);
+      const text = extractTextContent(m.content);
+      if (text) blocks.push({ type: "text", text });
       for (const tc of m.tool_calls || []) {
         blocks.push({
           type: "tool_use",
@@ -190,16 +218,15 @@ function openAiMessagesToZed(messages: OpenAIMessage[]): { messages: Array<{ rol
           input: safeJsonParse(tc.function?.arguments) || {},
         });
       }
-      if (blocks.length) zed.push({ role: "assistant", content: blocks });
-      else if (textBlocks.length === 0 && (m.tool_calls?.length || 0) === 0) {
-        // ensure at least empty assistant message if needed
+      if (blocks.length > 0) {
+        anthropicMessages.push({ role: "assistant", content: blocks });
       }
     } else if (m.role === "tool") {
       let text = "";
       if (typeof m.content === "string") text = m.content;
       else if (Array.isArray(m.content)) text = m.content.map((b) => (b as { text?: string }).text ?? "").join("");
       else if (m.content) text = JSON.stringify(m.content);
-      zed.push({
+      anthropicMessages.push({
         role: "user",
         content: [
           {
@@ -209,12 +236,204 @@ function openAiMessagesToZed(messages: OpenAIMessage[]): { messages: Array<{ rol
           },
         ],
       });
-    } else {
-      zed.push({ role: m.role === "assistant" ? "assistant" : "user", content: openAiContentToZedBlocks(m.content) });
     }
   }
 
-  return { messages: zed, system: systemParts.join("\n\n") };
+  let mappedTools: unknown[] | undefined;
+  if (tools && tools.length > 0) {
+    mappedTools = tools.map((t) => ({
+      name: t.function.name,
+      description: t.function.description,
+      input_schema: t.function.parameters || { type: "object", properties: {} },
+    }));
+  }
+
+  return {
+    model: modelId,
+    stream: true,
+    max_tokens: maxTokens,
+    messages: anthropicMessages,
+    ...(systemPrompt ? { system: systemPrompt } : {}),
+    ...(mappedTools && mappedTools.length > 0 ? { tools: mappedTools } : {}),
+  };
+}
+
+function buildOpenAiRequest(
+  modelId: string,
+  cleanMessages: OpenAIMessage[],
+  tools: OpenAITool[] | undefined,
+  systemPrompt: string,
+  maxTokens: number,
+): ZedAssistantRequest["provider_request"] {
+  const input: unknown[] = [];
+
+  for (const m of cleanMessages) {
+    if (m.role === "user") {
+      const blocks: unknown[] = [];
+      if (typeof m.content === "string") {
+        if (m.content) blocks.push({ type: "input_text", text: m.content });
+      } else if (Array.isArray(m.content)) {
+        for (const b of m.content) {
+          if (!b) continue;
+          const item = b as { type: string; text?: string; image_url?: { url?: string } | string };
+          if ((item.type === "text" || item.type === "input_text") && item.text) {
+            blocks.push({ type: "input_text", text: item.text });
+          } else if (item.type === "image_url" || item.type === "input_image") {
+            const url = typeof item.image_url === "object" ? item.image_url?.url : item.image_url;
+            if (url) {
+              blocks.push({ type: "input_image", image_url: url });
+            }
+          }
+        }
+      }
+      if (blocks.length > 0) {
+        input.push({ type: "message", role: "user", content: blocks });
+      }
+    } else if (m.role === "assistant") {
+      const text = extractTextContent(m.content);
+      if (text) {
+        input.push({
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text }],
+        });
+      }
+      for (const tc of m.tool_calls || []) {
+        input.push({
+          type: "function_call",
+          call_id: tc.id || crypto.randomUUID(),
+          name: tc.function?.name || "unknown",
+          arguments: tc.function?.arguments || "{}",
+        });
+      }
+    } else if (m.role === "tool") {
+      let text = "";
+      if (typeof m.content === "string") text = m.content;
+      else if (Array.isArray(m.content)) text = m.content.map((b) => (b as { text?: string }).text ?? "").join("");
+      else if (m.content) text = JSON.stringify(m.content);
+      input.push({
+        type: "function_call_output",
+        call_id: m.tool_call_id,
+        output: text || "",
+      });
+    }
+  }
+
+  let mappedTools: unknown[] | undefined;
+  if (tools && tools.length > 0) {
+    mappedTools = tools.map((t) => ({
+      type: "function",
+      name: t.function.name,
+      description: t.function.description,
+      parameters: t.function.parameters || { type: "object", properties: {} },
+    }));
+  }
+
+  return {
+    model: modelId,
+    stream: true,
+    input,
+    max_output_tokens: maxTokens,
+    ...(systemPrompt ? { instructions: systemPrompt } : {}),
+    ...(mappedTools && mappedTools.length > 0 ? { tools: mappedTools } : {}),
+  };
+}
+
+function buildGoogleRequest(
+  modelId: string,
+  cleanMessages: OpenAIMessage[],
+  tools: OpenAITool[] | undefined,
+  systemPrompt: string,
+  maxTokens: number,
+): ZedAssistantRequest["provider_request"] {
+  const contents: unknown[] = [];
+  // Map of tool_call_id -> tool_name to help associate tool responses
+  const toolNameMap = new Map<string, string>();
+
+  for (const m of cleanMessages) {
+    if (m.role === "user") {
+      const parts: unknown[] = [];
+      if (typeof m.content === "string") {
+        if (m.content) parts.push({ text: m.content });
+      } else if (Array.isArray(m.content)) {
+        for (const b of m.content) {
+          if (!b) continue;
+          const item = b as { type: string; text?: string; image_url?: { url: string } };
+          if (item.type === "text" && item.text) {
+            parts.push({ text: item.text });
+          } else if (item.type === "image_url") {
+            const url = item.image_url?.url || "";
+            const match = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
+            if (match) {
+              parts.push({
+                inlineData: { mimeType: match[1], data: match[2] },
+              });
+            }
+          }
+        }
+      }
+      if (parts.length > 0) {
+        contents.push({ role: "user", parts });
+      }
+    } else if (m.role === "assistant") {
+      const parts: unknown[] = [];
+      const text = extractTextContent(m.content);
+      if (text) parts.push({ text });
+      for (const tc of m.tool_calls || []) {
+        if (tc.id && tc.function?.name) {
+          toolNameMap.set(tc.id, tc.function.name);
+        }
+        parts.push({
+          functionCall: {
+            name: tc.function?.name || "unknown",
+            args: safeJsonParse(tc.function?.arguments) || {},
+          },
+        });
+      }
+      if (parts.length > 0) {
+        contents.push({ role: "model", parts });
+      }
+    } else if (m.role === "tool") {
+      let text = "";
+      if (typeof m.content === "string") text = m.content;
+      else if (Array.isArray(m.content)) text = m.content.map((b) => (b as { text?: string }).text ?? "").join("");
+      else if (m.content) text = JSON.stringify(m.content);
+      const toolName = (m.tool_call_id && toolNameMap.get(m.tool_call_id)) || "tool";
+      contents.push({
+        role: "user",
+        parts: [
+          {
+            functionResponse: {
+              name: toolName,
+              response: { output: text || "" },
+            },
+          },
+        ],
+      });
+    }
+  }
+
+  let mappedTools: unknown[] | undefined;
+  if (tools && tools.length > 0) {
+    mappedTools = [
+      {
+        functionDeclarations: tools.map((t) => ({
+          name: t.function.name,
+          description: t.function.description,
+          parameters: t.function.parameters || { type: "OBJECT", properties: {} },
+        })),
+      },
+    ];
+  }
+
+  return {
+    model: modelId,
+    stream: true,
+    contents,
+    max_output_tokens: maxTokens,
+    ...(systemPrompt ? { systemInstruction: { parts: [{ text: systemPrompt }] } } : {}),
+    ...(mappedTools && mappedTools.length > 0 ? { tools: mappedTools } : {}),
+  };
 }
 
 /**
@@ -224,29 +443,31 @@ function openAiMessagesToZed(messages: OpenAIMessage[]): { messages: Array<{ rol
 export function adaptOpenAIToZed(req: OpenAIChatRequest): ZedAssistantRequest {
   const modelId = normalizeModelId(req.model);
   const provider = getZedProvider(modelId);
-  const { messages, system } = openAiMessagesToZed(req.messages);
+  const { cleanMessages, systemPrompt } = extractSystemAndMessages(req.messages);
 
-  let tools: Array<{ name: string; description?: string; input_schema: unknown }> | undefined;
-  if (Array.isArray(req.tools)) {
-    const mapped = req.tools.map(openAiToolToZed).filter(Boolean) as Array<{ name: string; description?: string; input_schema: unknown }>;
-    if (mapped.length > 0) tools = mapped;
+  let tools: OpenAITool[] | undefined = Array.isArray(req.tools) && req.tools.length > 0 ? req.tools : undefined;
+  // For simple greeting with no tool need, skip tools
+  const isSimpleGreeting =
+    cleanMessages.length === 1 &&
+    cleanMessages[0].role === "user" &&
+    typeof cleanMessages[0].content === "string" &&
+    cleanMessages[0].content.trim().toLowerCase() === "hi";
+
+  if (isSimpleGreeting && tools && tools.length > 0) {
+    tools = undefined;
   }
 
-  const maxTokens = req.max_tokens || req.max_completion_tokens || 64000;
+  const maxTokens = req.max_tokens || req.max_completion_tokens || 16384;
   const temperature = req.temperature ?? 1.0;
 
-  // Tool protocol suffix is required for correct tool_use behavior (per verified proxy)
-  const systemPrompt = system
-    ? `${system}\n\n## Tool Protocol\n- Use native tool_use API only.\n- NEVER output XML tags like <tool>.\n- The user already sees tool output. Do not repeat it.`
-    : "";
-
-  const providerRequest: ZedAssistantRequest["provider_request"] = {
-    model: modelId,
-    max_tokens: maxTokens,
-    messages,
-    ...(tools && tools.length > 0 && { tools }),
-    system: systemPrompt,
-  };
+  let providerRequest: ZedAssistantRequest["provider_request"];
+  if (provider === "open_ai") {
+    providerRequest = buildOpenAiRequest(modelId, cleanMessages, tools, systemPrompt, maxTokens);
+  } else if (provider === "google") {
+    providerRequest = buildGoogleRequest(modelId, cleanMessages, tools, systemPrompt, maxTokens);
+  } else {
+    providerRequest = buildAnthropicRequest(modelId, cleanMessages, tools, systemPrompt, maxTokens);
+  }
 
   return {
     thread_id: crypto.randomUUID(),

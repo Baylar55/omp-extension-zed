@@ -196,6 +196,15 @@ export function findBrowserSessionCookie() {
     }
     return null;
 }
+function isPlausibleJwt(token) {
+    const t = token.trim();
+    return t.startsWith("eyJ") && t.split(".").length === 3 && t.length > 20;
+}
+function isEncryptedPayload(token) {
+    const t = token.trim();
+    // RSA 2048 encrypted payload is 256 bytes -> 344 chars base64/base64url, not JWT, not JSON
+    return t.length >= 300 && t.length <= 500 && !isPlausibleJwt(t) && !t.trim().startsWith("{") && /^[A-Za-z0-9-_+/=]+$/.test(t);
+}
 /**
  * Reads stored credentials from disk, checking environment variables and system keychain.
  */
@@ -205,6 +214,11 @@ export function loadCredentials(options) {
     const envCookie = process.env["ZED_SESSION_COOKIE"] || process.env["ZED_COOKIE"];
     const envUserId = process.env["ZED_USER_ID"];
     if (envToken || envCookie) {
+        // Validate env token is not an undecrypted payload
+        if (envToken && isEncryptedPayload(envToken)) {
+            // Treat as invalid, force re-login
+            return null;
+        }
         return {
             accessToken: envToken,
             sessionCookie: envCookie,
@@ -235,6 +249,17 @@ export function loadCredentials(options) {
         // Ignore corrupt/unreadable files
     }
     if (fileCreds) {
+        // Detect undecrypted RSA payload saved due to prior bug – treat as logged out
+        if (fileCreds.accessToken && isEncryptedPayload(fileCreds.accessToken)) {
+            // Auto-clear invalid file to force re-login
+            try {
+                const fp = getCredentialsFilePath();
+                if (fs.existsSync(fp))
+                    fs.unlinkSync(fp);
+            }
+            catch { }
+            return null;
+        }
         if (!fileCreds.sessionCookie && !options?.skipSystem) {
             const browserCookie = findBrowserSessionCookie();
             if (browserCookie) {

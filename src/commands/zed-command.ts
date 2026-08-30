@@ -2,8 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@oh-my-pi/pi-coding-
 import { clearCredentials, loadCredentials, maskSecret, saveCredentials } from "../auth/credential-store.js";
 import { startOAuthFlow } from "../auth/oauth.js";
 import { ZED_MODELS } from "../models.js";
-import { fetchZedUsage, formatUsageSummary } from "../usage/tracker.js";
-
+import { fetchZedUsage, formatUsageSummary, resetLocalSpendHistory, setLocalSpendAmount } from "../usage/tracker.js";
 /**
  * Registers the `/zed` slash command and its subcommands.
  */
@@ -113,7 +112,25 @@ export function registerZedCommands(pi: ExtensionAPI): void {
             return;
           }
           saveCredentials({ sessionCookie: cookie });
-          ctx.ui.notify("✓ Session cookie saved successfully!", "info");
+          ctx.ui.notify("✓ Session cookie saved successfully! Live dashboard sync enabled.", "info");
+          break;
+        }
+
+        case "set-spend": {
+          const amountStr = args.replace(/^set-spend\s+/i, "").replace(/^\$/, "").trim();
+          const amount = parseFloat(amountStr);
+          if (isNaN(amount) || amount < 0) {
+            ctx.ui.notify("Usage: /zed set-spend <amount_in_usd> (e.g. /zed set-spend 0.53)", "warning");
+            return;
+          }
+          setLocalSpendAmount(amount);
+          ctx.ui.notify(`✓ Current spend set to $${amount.toFixed(2)}.`, "info");
+          break;
+        }
+
+        case "reset-usage": {
+          resetLocalSpendHistory();
+          ctx.ui.notify("✓ Local usage spend count has been reset to $0.00.", "info");
           break;
         }
 
@@ -126,7 +143,9 @@ export function registerZedCommands(pi: ExtensionAPI): void {
             `• /zed login       - Connect your Zed account via browser`,
             `• /zed logout      - Remove stored Zed credentials`,
             `• /zed set-token   - Manually save an access token`,
-            `• /zed set-cookie  - Manually save a zed.session cookie`,
+            `• /zed set-cookie  - Manually save a zed.session cookie for live dashboard sync`,
+            `• /zed set-spend   - Set current month spend (e.g. /zed set-spend 0.53)`,
+            `• /zed reset-usage - Reset local spend count to $0.00`,
           ].join("\n");
           ctx.ui.notify(help, "info");
           break;

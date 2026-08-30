@@ -147,7 +147,7 @@ describe("Zed Bridge Integration - Hang Fixes", () => {
     // Claude -> anthropic
     const claudeReq = adaptOpenAIToZed({ model: "zed/claude-sonnet-4-6", messages: [{ role: "user", content: "hi" }] } as any);
     expect(claudeReq.provider).toBe("anthropic");
-    expect(claudeReq.model).toBe("claude-sonnet-4.6");
+    expect(claudeReq.model).toBe("claude-sonnet-4-6");
     expect(getZedProvider("claude-sonnet-5")).toBe("anthropic");
 
     // GPT -> open_ai

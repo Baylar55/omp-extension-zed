@@ -44,15 +44,81 @@ function generateZedKeypair() {
     return { publicKeyBase64Url, privateKeyPem: privateKey };
 }
 /**
- * Decrypts the Base64URL-encoded token sent back by zed.dev using PKCS#1 v1.5 padding.
+ * Decrypts the Base64URL-encoded token sent back by zed.dev.
+ * Tries multiple encodings (base64url, base64) and paddings (PKCS1, OAEP)
+ * because Zed's behavior has varied across versions.
  */
 function decryptZedToken(encryptedTokenBase64Url, privateKeyPem) {
-    const encryptedBytes = Buffer.from(encryptedTokenBase64Url, "base64url");
-    const decrypted = crypto.privateDecrypt({
-        key: privateKeyPem,
-        padding: crypto.constants.RSA_PKCS1_PADDING,
-    }, encryptedBytes);
-    return decrypted.toString("utf-8");
+    const candidates = [];
+    // Try base64url first, then standard base64, then URL-decoded
+    const trimmed = encryptedTokenBase64Url.trim();
+    const urlDecoded = decodeURIComponent(trimmed);
+    for (const enc of [trimmed, urlDecoded]) {
+        for (const encoding of ["base64url", "base64"]) {
+            try {
+                const buf = Buffer.from(enc, encoding);
+                if (buf.length === 256 || buf.length === 128) {
+                    candidates.push(buf);
+                }
+                else if (buf.length > 0) {
+                    candidates.push(buf);
+                }
+            }
+            catch { }
+        }
+    }
+    // Deduplicate
+    const seen = new Set();
+    const unique = [];
+    for (const b of candidates) {
+        const key = b.toString("base64");
+        if (!seen.has(key)) {
+            seen.add(key);
+            unique.push(b);
+        }
+    }
+    const paddings = [
+        crypto.constants.RSA_PKCS1_PADDING,
+        crypto.constants.RSA_PKCS1_OAEP_PADDING,
+    ];
+    let lastErr;
+    for (const buf of unique) {
+        for (const padding of paddings) {
+            try {
+                const opts = {
+                    key: privateKeyPem,
+                    padding,
+                };
+                if (padding === crypto.constants.RSA_PKCS1_OAEP_PADDING) {
+                    // Try both sha1 and sha256 for OAEP
+                    for (const oaepHash of ["sha1", "sha256"]) {
+                        try {
+                            const decrypted = crypto.privateDecrypt({ ...opts, oaepHash }, buf);
+                            const text = decrypted.toString("utf-8").trim();
+                            if (text)
+                                return text;
+                        }
+                        catch (e) {
+                            lastErr = e;
+                        }
+                    }
+                    continue;
+                }
+                const decrypted = crypto.privateDecrypt(opts, buf);
+                const text = decrypted.toString("utf-8").trim();
+                if (text)
+                    return text;
+            }
+            catch (e) {
+                lastErr = e;
+            }
+        }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+function isPlausibleJwt(token) {
+    const t = token.trim();
+    return t.startsWith("eyJ") && t.split(".").length === 3 && t.length > 20;
 }
 /**
  * Runs a local loopback server and initiates Zed's native RSA PKCS#1 sign-in flow.
@@ -69,13 +135,63 @@ export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT) {
                 const userId = query["user_id"];
                 const sessionCookie = query["session"];
                 if (rawAccessToken) {
-                    let accessToken = rawAccessToken;
-                    // Attempt RSA decryption if it's an encrypted token
-                    try {
-                        accessToken = decryptZedToken(rawAccessToken, privateKeyPem);
+                    let accessToken = rawAccessToken.trim();
+                    let wasEncrypted = false;
+                    // Detect encrypted RSA payload (344 chars base64 for 2048-bit, not a JWT)
+                    const looksEncrypted = accessToken.length >= 300 && !isPlausibleJwt(accessToken) && !accessToken.trim().startsWith("{");
+                    if (looksEncrypted) {
+                        wasEncrypted = true;
+                        try {
+                            const decrypted = decryptZedToken(accessToken, privateKeyPem);
+                            // Only use decrypted if it looks like a real token
+                            if (isPlausibleJwt(decrypted) || decrypted.trim().startsWith("{")) {
+                                accessToken = decrypted;
+                            }
+                            else {
+                                throw new Error(`Decrypted token does not look valid: ${decrypted.slice(0, 20)}...`);
+                            }
+                        }
+                        catch (e) {
+                            res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
+                            res.end(`
+                <!DOCTYPE html><html><body style="font-family:system-ui;background:#121212;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh"><div style="background:#1e1e1e;padding:2rem;border-radius:12px;text-align:center;max-width:480px;border:1px solid #333">
+                <h1 style="color:#f87171">Decryption failed</h1>
+                <p>Could not decrypt Zed token. Please close this window, run <code>/zed logout</code> then <code>/zed login</code> again.</p>
+                <p style="color:#a1a1aa;font-size:0.9rem">Error: ${e instanceof Error ? e.message : String(e)}</p>
+                </div></body></html>
+              `);
+                            server.close();
+                            reject(new Error(`Failed to decrypt Zed token: ${e instanceof Error ? e.message : String(e)}`));
+                            return;
+                        }
                     }
-                    catch {
-                        // If already plaintext, use as is
+                    else {
+                        // Try decryption opportunistically for any non-JWT token that might be encrypted
+                        if (!isPlausibleJwt(accessToken) && accessToken.length > 100) {
+                            try {
+                                const maybe = decryptZedToken(accessToken, privateKeyPem);
+                                if (isPlausibleJwt(maybe) || maybe.trim().startsWith("{")) {
+                                    accessToken = maybe;
+                                    wasEncrypted = true;
+                                }
+                            }
+                            catch {
+                                // keep original
+                            }
+                        }
+                    }
+                    // Final validation: must be JWT or JSON secret
+                    if (!isPlausibleJwt(accessToken) && !accessToken.trim().startsWith("{") && accessToken.length < 20) {
+                        res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
+                        res.end(`
+              <!DOCTYPE html><html><body style="font-family:system-ui;background:#121212;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh"><div style="background:#1e1e1e;padding:2rem;border-radius:12px;text-align:center;max-width:480px;border:1px solid #333">
+              <h1 style="color:#f87171">Invalid token</h1>
+              <p>Received token does not look valid. Please try <code>/zed login</code> again.</p>
+              </div></body></html>
+            `);
+                        server.close();
+                        reject(new Error(`Invalid token received from Zed (length ${accessToken.length}, encrypted=${wasEncrypted})`));
+                        return;
                     }
                     const creds = {
                         accessToken,

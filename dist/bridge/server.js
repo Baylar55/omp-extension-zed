@@ -79,7 +79,9 @@ export async function startBridgeServer(preferredPort = 38142) {
                         // Initial role chunk
                         res.write(createSSEChunk(completionId, chatReq.model, { role: "assistant" }));
                         let totalCompletionTokens = 0;
+                        let hasToolCalls = false;
                         try {
+                            let hasVisibleText = false;
                             for await (const event of client.streamCompletion(zedReq, creds)) {
                                 if (event.error) {
                                     // Forward upstream error as SSE error before closing
@@ -98,12 +100,20 @@ export async function startBridgeServer(preferredPort = 38142) {
                                 }
                                 if (event.reasoning) {
                                     res.write(createSSEChunk(completionId, chatReq.model, { reasoning_content: event.reasoning }));
+                                    // Also surface reasoning as visible text if no other text yet, to avoid empty-stop retry
+                                    if (!hasVisibleText) {
+                                        res.write(createSSEChunk(completionId, chatReq.model, { content: event.reasoning }));
+                                        totalCompletionTokens += Math.max(1, Math.ceil(event.reasoning.length / 4));
+                                        hasVisibleText = true;
+                                    }
                                 }
                                 if (event.text) {
+                                    hasVisibleText = true;
                                     totalCompletionTokens += Math.max(1, Math.ceil(event.text.length / 4));
                                     res.write(createSSEChunk(completionId, chatReq.model, { content: event.text }));
                                 }
                                 if (event.toolCall) {
+                                    hasToolCalls = true;
                                     totalCompletionTokens += Math.max(1, Math.ceil(event.toolCall.arguments.length / 4));
                                     res.write(createSSEChunk(completionId, chatReq.model, {
                                         tool_calls: [
@@ -121,7 +131,7 @@ export async function startBridgeServer(preferredPort = 38142) {
                                 }
                             }
                             // Final stop chunk and [DONE]
-                            res.write(createSSEChunk(completionId, chatReq.model, {}, "stop"));
+                            res.write(createSSEChunk(completionId, chatReq.model, {}, hasToolCalls ? "tool_calls" : "stop"));
                             res.write("data: [DONE]\n\n");
                             res.end();
                             const promptEstTokens = Math.ceil(bodyStr.length / 4);
