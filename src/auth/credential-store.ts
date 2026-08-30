@@ -2,7 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import type { ZedCredentials } from "./types.js";
 
 /**
@@ -114,7 +114,7 @@ foreach ($t in $targets) {
       const targets = ["https://zed.dev", "zed.dev"];
       for (const target of targets) {
         try {
-          const out = execSync(`security find-generic-password -s "${target}" -w`, {
+          const out = execFileSync("security", ["find-generic-password", "-s", target, "-w"], {
             encoding: "utf-8",
             timeout: 2000,
             stdio: ["ignore", "pipe", "ignore"],
@@ -132,7 +132,7 @@ foreach ($t in $targets) {
       }
     } else if (platform === "linux") {
       try {
-        const out = execSync(`secret-tool lookup service https://zed.dev`, {
+        const out = execFileSync("secret-tool", ["lookup", "service", "https://zed.dev"], {
           encoding: "utf-8",
           timeout: 2000,
           stdio: ["ignore", "pipe", "ignore"],
@@ -243,8 +243,20 @@ function decryptChromiumValue(key: Buffer, buffer: Buffer): string | null {
 
 function copyLockedFileWindows(src: string, dst: string): boolean {
   try {
-    const cmd = `powershell -NoProfile -Command "$s = [System.IO.File]::Open('${src}', [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite); $ms = New-Object System.IO.MemoryStream; $s.CopyTo($ms); $s.Close(); [System.IO.File]::WriteAllBytes('${dst}', $ms.ToArray());"`;
-    execSync(cmd, { stdio: "ignore", timeout: 3000 });
+    const psScript = `
+$src = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${Buffer.from(src, "utf-8").toString("base64")}'))
+$dst = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${Buffer.from(dst, "utf-8").toString("base64")}'))
+$s = [System.IO.File]::Open($src, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+$ms = New-Object System.IO.MemoryStream
+$s.CopyTo($ms)
+$s.Close()
+[System.IO.File]::WriteAllBytes($dst, $ms.ToArray())
+`;
+    const encoded = Buffer.from(psScript, "utf16le").toString("base64");
+    execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, {
+      stdio: "ignore",
+      timeout: 3000,
+    });
     return fs.existsSync(dst) && fs.statSync(dst).size > 0;
   } catch {
     return false;
@@ -368,8 +380,9 @@ export function findBrowserSessionCookie(): string | null {
 export interface LoadCredentialsOptions {
   /** Skip scanning OS keychain / Credential Manager */
   skipSystem?: boolean;
+  /** Allow scanning browser cookie stores (only for explicit sync) */
+  allowBrowserScan?: boolean;
 }
-
 function isPlausibleJwt(token: string): boolean {
   const t = token.trim();
   return t.startsWith("eyJ") && t.split(".").length === 3 && t.length > 20;
@@ -433,7 +446,7 @@ export function loadCredentials(options?: LoadCredentialsOptions): ZedCredential
       } catch {}
       return null;
     }
-    if (!fileCreds.sessionCookie && !options?.skipSystem) {
+    if (!fileCreds.sessionCookie && options?.allowBrowserScan) {
       const browserCookie = findBrowserSessionCookie();
       if (browserCookie) {
         fileCreds.sessionCookie = browserCookie;
@@ -446,16 +459,17 @@ export function loadCredentials(options?: LoadCredentialsOptions): ZedCredential
   if (!options?.skipSystem) {
     const sysCreds = getSystemZedCredentials();
     if (sysCreds && sysCreds.accessToken) {
-      const browserCookie = findBrowserSessionCookie();
-      if (browserCookie) {
-        sysCreds.sessionCookie = browserCookie;
+      if (options?.allowBrowserScan) {
+        const browserCookie = findBrowserSessionCookie();
+        if (browserCookie) {
+          sysCreds.sessionCookie = browserCookie;
+        }
       }
       // Cache discovered credentials for subsequent instantaneous lookups
       saveCredentials(sysCreds);
       return sysCreds;
     }
   }
-
   return null;
 }
 
@@ -472,12 +486,17 @@ export function saveCredentials(creds: Partial<ZedCredentials>): void {
   delete toSave.loggedOut;
 
   const dir = getOmpAgentDir();
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 
   const filePath = getCredentialsFilePath();
-  fs.writeFileSync(filePath, JSON.stringify(toSave, null, 2), "utf-8");
+  fs.writeFileSync(filePath, JSON.stringify(toSave, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {}
 }
-
 /**
  * Clears stored credentials and marks state as logged out.
  */

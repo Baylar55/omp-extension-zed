@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { findBrowserSessionCookie, getOmpAgentDir, saveCredentials } from "../auth/credential-store.js";
+import { getOmpAgentDir } from "../auth/credential-store.js";
 export const MODEL_PRICING = {
     "claude-sonnet-5": { input: 3.0, output: 15.0 },
     "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
@@ -84,8 +84,16 @@ export function resetLocalSpendHistory() {
     };
     try {
         const dir = getOmpAgentDir();
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(getUsageHistoryPath(), JSON.stringify(emptyRecord, null, 2), "utf-8");
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        const filePath = getUsageHistoryPath();
+        fs.writeFileSync(filePath, JSON.stringify(emptyRecord, null, 2), {
+            encoding: "utf-8",
+            mode: 0o600,
+        });
+        try {
+            fs.chmodSync(filePath, 0o600);
+        }
+        catch { }
     }
     catch { }
 }
@@ -95,8 +103,16 @@ export function setLocalSpendAmount(amount) {
     current.lastUpdated = Date.now();
     try {
         const dir = getOmpAgentDir();
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(getUsageHistoryPath(), JSON.stringify(current, null, 2), "utf-8");
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        const filePath = getUsageHistoryPath();
+        fs.writeFileSync(filePath, JSON.stringify(current, null, 2), {
+            encoding: "utf-8",
+            mode: 0o600,
+        });
+        try {
+            fs.chmodSync(filePath, 0o600);
+        }
+        catch { }
     }
     catch { }
 }
@@ -110,8 +126,16 @@ export function recordTokenUsage(model, inputTokens, outputTokens) {
     current.lastUpdated = Date.now();
     try {
         const dir = getOmpAgentDir();
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(getUsageHistoryPath(), JSON.stringify(current, null, 2), "utf-8");
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        const filePath = getUsageHistoryPath();
+        fs.writeFileSync(filePath, JSON.stringify(current, null, 2), {
+            encoding: "utf-8",
+            mode: 0o600,
+        });
+        try {
+            fs.chmodSync(filePath, 0o600);
+        }
+        catch { }
     }
     catch {
         // Ignore save errors
@@ -130,16 +154,8 @@ export async function fetchZedUsage(creds) {
         "Referer": "https://dashboard.zed.dev/",
         "Origin": "https://dashboard.zed.dev",
     };
-    // 1. Try Frontend Billing API if session cookie is present or auto-discoverable from browser
-    let cookieToTry = creds.sessionCookie;
-    let isAutoDiscovered = false;
-    if (!cookieToTry) {
-        const discovered = findBrowserSessionCookie();
-        if (discovered) {
-            cookieToTry = discovered;
-            isAutoDiscovered = true;
-        }
-    }
+    // 1. Try Frontend Billing API if session cookie is present in credentials
+    const cookieToTry = creds.sessionCookie;
     const tryBillingWithCookie = async (rawCookie) => {
         const cookieHeader = rawCookie.startsWith("zed.session=") ? rawCookie : `zed.session=${rawCookie}`;
         const billingEndpoints = [
@@ -232,21 +248,7 @@ export async function fetchZedUsage(creds) {
     if (cookieToTry) {
         const billingReport = await tryBillingWithCookie(cookieToTry);
         if (billingReport) {
-            if (isAutoDiscovered) {
-                saveCredentials({ sessionCookie: cookieToTry });
-            }
             return billingReport;
-        }
-        // If initial cookie was stored but failed (expired), try a fresh browser scan
-        if (!isAutoDiscovered) {
-            const freshDiscovered = findBrowserSessionCookie();
-            if (freshDiscovered && freshDiscovered !== cookieToTry) {
-                const retryReport = await tryBillingWithCookie(freshDiscovered);
-                if (retryReport) {
-                    saveCredentials({ sessionCookie: freshDiscovered });
-                    return retryReport;
-                }
-            }
         }
     }
     // 2. Try Client User Endpoint if access token is present

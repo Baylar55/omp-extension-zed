@@ -21,6 +21,8 @@ export declare function findBrowserSessionCookie(): string | null;
 export interface LoadCredentialsOptions {
     /** Skip scanning OS keychain / Credential Manager */
     skipSystem?: boolean;
+    /** Allow scanning browser cookie stores (only for explicit sync) */
+    allowBrowserScan?: boolean;
 }
 /**
  * Reads stored credentials from disk, checking environment variables and system keychain.

@@ -4,10 +4,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ZED_ENDPOINT, ZED_VERSION } from "./types.js";
 function debugLog(msg) {
+    if (process.env["DEBUG_ZED"] !== "1" && process.env["DEBUG_ZED"] !== "true") {
+        return;
+    }
     try {
         const logPath = path.join(os.homedir(), ".omp", "agent", "zed_debug.log");
-        fs.mkdirSync(path.dirname(logPath), { recursive: true });
-        fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}\n`);
+        fs.mkdirSync(path.dirname(logPath), { recursive: true, mode: 0o700 });
+        fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}\n`, {
+            mode: 0o600,
+        });
     }
     catch { }
 }
@@ -167,7 +172,7 @@ export class ZedCloudClient {
      */
     async *streamCompletion(req, creds, signal) {
         const url = this.baseUrl; // already is https://cloud.zed.dev/completions
-        debugLog(`>>> ZED REQUEST provider=${req.provider} model=${req.model} temp=${req.temperature} provider_request=${JSON.stringify(req.provider_request).slice(0, 2000)}`);
+        debugLog(`>>> ZED REQUEST provider=${req.provider} model=${req.model} temp=${req.temperature}`);
         let jwt;
         try {
             jwt = await this.resolveJwt(creds);
@@ -182,7 +187,12 @@ export class ZedCloudClient {
         if (!headers["Authorization"]) {
             throw new Error("Zed Authentication Failed: No access token found. Please run /zed login.");
         }
-        debugLog(`>>> FETCH ${url} headers=${JSON.stringify({ ...headers, Authorization: headers.Authorization ? headers.Authorization.slice(0, 20) + "..." : undefined })}`);
+        const sanitizedHeaders = {
+            ...headers,
+            Authorization: headers["Authorization"] ? headers["Authorization"].slice(0, 15) + "..." : undefined,
+            Cookie: headers["Cookie"] ? "zed.session=••••••••" : undefined,
+        };
+        debugLog(`>>> FETCH ${url} headers=${JSON.stringify(sanitizedHeaders)}`);
         const effectiveSignal = signal || AbortSignal.timeout(60000);
         let response = await fetch(url, {
             method: "POST",

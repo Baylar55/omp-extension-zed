@@ -5,14 +5,49 @@ import { adaptOpenAIToZed, createChatCompletionResponse, createSSEChunk } from "
 import { ZedCloudClient } from "./client.js";
 import { ZED_MODELS } from "../models.js";
 import { recordTokenUsage } from "../usage/tracker.js";
+const MAX_PAYLOAD_BYTES = 15 * 1024 * 1024; // 15 MB
+function isTrustedOrigin(origin) {
+    if (!origin)
+        return true; // Local non-browser CLI / tools (OMP, curl, node fetch)
+    try {
+        const parsed = new URL(origin);
+        const host = parsed.hostname.toLowerCase();
+        return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+    }
+    catch {
+        return false;
+    }
+}
+function isTrustedHost(hostHeader) {
+    if (!hostHeader)
+        return true;
+    const cleanHost = hostHeader.split(":")[0]?.toLowerCase();
+    return cleanHost === "127.0.0.1" || cleanHost === "localhost" || cleanHost === "::1" || cleanHost === "[::1]";
+}
 /**
  * Creates and starts an in-process OpenAI-compatible HTTP bridge server for Zed.
  */
 export async function startBridgeServer(preferredPort = 38142) {
     const client = new ZedCloudClient();
     const server = http.createServer(async (req, res) => {
-        // CORS headers for local tools
-        res.setHeader("Access-Control-Allow-Origin", "*");
+        // 1. Validate Host header to prevent DNS rebinding attacks
+        const hostHeader = req.headers["host"];
+        if (!isTrustedHost(hostHeader)) {
+            res.writeHead(403, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: { message: "Forbidden: untrusted host header", type: "security_error" } }));
+            return;
+        }
+        // 2. Validate Origin header to prevent drive-by cross-origin attacks from external websites
+        const originHeader = req.headers["origin"];
+        if (originHeader) {
+            if (!isTrustedOrigin(originHeader)) {
+                res.writeHead(403, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: { message: "Forbidden: cross-origin requests from external web origins are not permitted", type: "security_error" } }));
+                return;
+            }
+            res.setHeader("Access-Control-Allow-Origin", originHeader);
+            res.setHeader("Vary", "Origin");
+        }
         res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
         res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
         if (req.method === "OPTIONS") {
@@ -27,7 +62,7 @@ export async function startBridgeServer(preferredPort = 38142) {
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({
                 status: "ok",
-                service: "omp-extension-zed-bridge",
+                service: "omp-zed-bridge",
                 authenticated: Boolean(creds?.accessToken || creds?.sessionCookie),
             }));
             return;
@@ -49,10 +84,28 @@ export async function startBridgeServer(preferredPort = 38142) {
         // 3. POST /v1/chat/completions
         if (req.method === "POST" && (urlPath === "/v1/chat/completions" || urlPath === "/chat/completions")) {
             let bodyStr = "";
+            let exceeded = false;
             req.on("data", (chunk) => {
+                if (exceeded)
+                    return;
+                if (bodyStr.length + chunk.length > MAX_PAYLOAD_BYTES) {
+                    exceeded = true;
+                    res.writeHead(413, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({
+                        error: {
+                            message: "Payload too large. Maximum allowed size is 15MB.",
+                            type: "invalid_request_error",
+                            code: "payload_too_large",
+                        },
+                    }));
+                    req.destroy();
+                    return;
+                }
                 bodyStr += chunk;
             });
             req.on("end", async () => {
+                if (exceeded)
+                    return;
                 try {
                     const creds = loadCredentials();
                     if (!creds || (!creds.accessToken && !creds.sessionCookie)) {

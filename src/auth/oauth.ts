@@ -1,32 +1,61 @@
 import * as crypto from "node:crypto";
 import * as http from "node:http";
 import * as url from "node:url";
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import type { ZedCredentials } from "./types.js";
 import { saveCredentials } from "./credential-store.js";
 
 const DEFAULT_CALLBACK_PORT = 35711;
 
+const ALLOWED_BROWSER_HOSTS: Record<string, true> = {
+  "zed.dev": true,
+  "dashboard.zed.dev": true,
+  "cloud.zed.dev": true,
+};
+
+/**
+ * Validates that a target URL belongs to trusted Zed domains and uses HTTPS.
+ */
+export function isValidZedUrl(targetUrl: string): boolean {
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol !== "https:") return false;
+    return Boolean(ALLOWED_BROWSER_HOSTS[parsed.hostname.toLowerCase()]);
+  } catch {
+    return false;
+  }
+}
+
+function escapeHtml(unsafe: string): string {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function isLocalHost(hostHeader: string | undefined): boolean {
+  if (!hostHeader) return true;
+  const clean = hostHeader.split(":")[0]?.toLowerCase();
+  return clean === "127.0.0.1" || clean === "localhost";
+}
+
 /**
  * Opens a URL in the user's default web browser across Windows, macOS, and Linux.
  */
 export function openBrowser(targetUrl: string): void {
-  const platform = process.platform;
-  let command = "";
-
-  if (platform === "win32") {
-    command = `start "" "${targetUrl}"`;
-  } else if (platform === "darwin") {
-    command = `open "${targetUrl}"`;
-  } else {
-    command = `xdg-open "${targetUrl}"`;
+  if (!isValidZedUrl(targetUrl)) {
+    return;
   }
-
-  exec(command, (err) => {
-    if (err) {
-      // Browser launch failed; user can still manually open the URL
-    }
-  });
+  const platform = process.platform;
+  if (platform === "win32") {
+    execFile("cmd.exe", ["/c", "start", "", targetUrl], () => {});
+  } else if (platform === "darwin") {
+    execFile("open", [targetUrl], () => {});
+  } else {
+    execFile("xdg-open", [targetUrl], () => {});
+  }
 }
 
 /**
@@ -140,9 +169,15 @@ export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT): Pro
 
     const server = http.createServer((req, res) => {
       try {
+        const host = req.headers["host"];
+        if (!isLocalHost(host)) {
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Forbidden: Invalid host header.");
+          return;
+        }
+
         const parsedUrl = url.parse(req.url || "", true);
         const query = parsedUrl.query;
-
         const rawAccessToken = (query["access_token"] || query["token"]) as string | undefined;
         const userId = query["user_id"] as string | undefined;
         const sessionCookie = query["session"] as string | undefined;
@@ -164,12 +199,13 @@ export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT): Pro
                 throw new Error(`Decrypted token does not look valid: ${decrypted.slice(0, 20)}...`);
               }
             } catch (e) {
+              const safeError = escapeHtml(e instanceof Error ? e.message : String(e));
               res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
               res.end(`
                 <!DOCTYPE html><html><body style="font-family:system-ui;background:#121212;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh"><div style="background:#1e1e1e;padding:2rem;border-radius:12px;text-align:center;max-width:480px;border:1px solid #333">
                 <h1 style="color:#f87171">Decryption failed</h1>
                 <p>Could not decrypt Zed token. Please close this window, run <code>/zed logout</code> then <code>/zed login</code> again.</p>
-                <p style="color:#a1a1aa;font-size:0.9rem">Error: ${e instanceof Error ? e.message : String(e)}</p>
+                <p style="color:#a1a1aa;font-size:0.9rem">Error: ${safeError}</p>
                 </div></body></html>
               `);
               server.close();

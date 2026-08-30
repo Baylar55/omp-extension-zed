@@ -1,29 +1,59 @@
 import * as crypto from "node:crypto";
 import * as http from "node:http";
 import * as url from "node:url";
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
 import { saveCredentials } from "./credential-store.js";
 const DEFAULT_CALLBACK_PORT = 35711;
+const ALLOWED_BROWSER_HOSTS = {
+    "zed.dev": true,
+    "dashboard.zed.dev": true,
+    "cloud.zed.dev": true,
+};
+/**
+ * Validates that a target URL belongs to trusted Zed domains and uses HTTPS.
+ */
+export function isValidZedUrl(targetUrl) {
+    try {
+        const parsed = new URL(targetUrl);
+        if (parsed.protocol !== "https:")
+            return false;
+        return Boolean(ALLOWED_BROWSER_HOSTS[parsed.hostname.toLowerCase()]);
+    }
+    catch {
+        return false;
+    }
+}
+function escapeHtml(unsafe) {
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+function isLocalHost(hostHeader) {
+    if (!hostHeader)
+        return true;
+    const clean = hostHeader.split(":")[0]?.toLowerCase();
+    return clean === "127.0.0.1" || clean === "localhost";
+}
 /**
  * Opens a URL in the user's default web browser across Windows, macOS, and Linux.
  */
 export function openBrowser(targetUrl) {
+    if (!isValidZedUrl(targetUrl)) {
+        return;
+    }
     const platform = process.platform;
-    let command = "";
     if (platform === "win32") {
-        command = `start "" "${targetUrl}"`;
+        execFile("cmd.exe", ["/c", "start", "", targetUrl], () => { });
     }
     else if (platform === "darwin") {
-        command = `open "${targetUrl}"`;
+        execFile("open", [targetUrl], () => { });
     }
     else {
-        command = `xdg-open "${targetUrl}"`;
+        execFile("xdg-open", [targetUrl], () => { });
     }
-    exec(command, (err) => {
-        if (err) {
-            // Browser launch failed; user can still manually open the URL
-        }
-    });
 }
 /**
  * Generates an RSA 2048-bit keypair formatted for Zed's PKCS#1 DER native_app_signin.
@@ -129,6 +159,12 @@ export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT) {
         const { publicKeyBase64Url, privateKeyPem } = generateZedKeypair();
         const server = http.createServer((req, res) => {
             try {
+                const host = req.headers["host"];
+                if (!isLocalHost(host)) {
+                    res.writeHead(403, { "Content-Type": "text/plain" });
+                    res.end("Forbidden: Invalid host header.");
+                    return;
+                }
                 const parsedUrl = url.parse(req.url || "", true);
                 const query = parsedUrl.query;
                 const rawAccessToken = (query["access_token"] || query["token"]);
@@ -152,12 +188,13 @@ export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT) {
                             }
                         }
                         catch (e) {
+                            const safeError = escapeHtml(e instanceof Error ? e.message : String(e));
                             res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
                             res.end(`
                 <!DOCTYPE html><html><body style="font-family:system-ui;background:#121212;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh"><div style="background:#1e1e1e;padding:2rem;border-radius:12px;text-align:center;max-width:480px;border:1px solid #333">
                 <h1 style="color:#f87171">Decryption failed</h1>
                 <p>Could not decrypt Zed token. Please close this window, run <code>/zed logout</code> then <code>/zed login</code> again.</p>
-                <p style="color:#a1a1aa;font-size:0.9rem">Error: ${e instanceof Error ? e.message : String(e)}</p>
+                <p style="color:#a1a1aa;font-size:0.9rem">Error: ${safeError}</p>
                 </div></body></html>
               `);
                             server.close();

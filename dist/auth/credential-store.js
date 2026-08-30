@@ -2,7 +2,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 /**
  * Returns the directory where OMP agent configuration and extension secrets reside.
  */
@@ -111,7 +111,7 @@ foreach ($t in $targets) {
             const targets = ["https://zed.dev", "zed.dev"];
             for (const target of targets) {
                 try {
-                    const out = execSync(`security find-generic-password -s "${target}" -w`, {
+                    const out = execFileSync("security", ["find-generic-password", "-s", target, "-w"], {
                         encoding: "utf-8",
                         timeout: 2000,
                         stdio: ["ignore", "pipe", "ignore"],
@@ -131,7 +131,7 @@ foreach ($t in $targets) {
         }
         else if (platform === "linux") {
             try {
-                const out = execSync(`secret-tool lookup service https://zed.dev`, {
+                const out = execFileSync("secret-tool", ["lookup", "service", "https://zed.dev"], {
                     encoding: "utf-8",
                     timeout: 2000,
                     stdio: ["ignore", "pipe", "ignore"],
@@ -244,8 +244,20 @@ function decryptChromiumValue(key, buffer) {
 }
 function copyLockedFileWindows(src, dst) {
     try {
-        const cmd = `powershell -NoProfile -Command "$s = [System.IO.File]::Open('${src}', [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite); $ms = New-Object System.IO.MemoryStream; $s.CopyTo($ms); $s.Close(); [System.IO.File]::WriteAllBytes('${dst}', $ms.ToArray());"`;
-        execSync(cmd, { stdio: "ignore", timeout: 3000 });
+        const psScript = `
+$src = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${Buffer.from(src, "utf-8").toString("base64")}'))
+$dst = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${Buffer.from(dst, "utf-8").toString("base64")}'))
+$s = [System.IO.File]::Open($src, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+$ms = New-Object System.IO.MemoryStream
+$s.CopyTo($ms)
+$s.Close()
+[System.IO.File]::WriteAllBytes($dst, $ms.ToArray())
+`;
+        const encoded = Buffer.from(psScript, "utf16le").toString("base64");
+        execSync(`powershell -NoProfile -NonInteractive -EncodedCommand ${encoded}`, {
+            stdio: "ignore",
+            timeout: 3000,
+        });
         return fs.existsSync(dst) && fs.statSync(dst).size > 0;
     }
     catch {
@@ -437,7 +449,7 @@ export function loadCredentials(options) {
             catch { }
             return null;
         }
-        if (!fileCreds.sessionCookie && !options?.skipSystem) {
+        if (!fileCreds.sessionCookie && options?.allowBrowserScan) {
             const browserCookie = findBrowserSessionCookie();
             if (browserCookie) {
                 fileCreds.sessionCookie = browserCookie;
@@ -449,9 +461,11 @@ export function loadCredentials(options) {
     if (!options?.skipSystem) {
         const sysCreds = getSystemZedCredentials();
         if (sysCreds && sysCreds.accessToken) {
-            const browserCookie = findBrowserSessionCookie();
-            if (browserCookie) {
-                sysCreds.sessionCookie = browserCookie;
+            if (options?.allowBrowserScan) {
+                const browserCookie = findBrowserSessionCookie();
+                if (browserCookie) {
+                    sysCreds.sessionCookie = browserCookie;
+                }
             }
             // Cache discovered credentials for subsequent instantaneous lookups
             saveCredentials(sysCreds);
@@ -472,9 +486,16 @@ export function saveCredentials(creds) {
     };
     delete toSave.loggedOut;
     const dir = getOmpAgentDir();
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const filePath = getCredentialsFilePath();
-    fs.writeFileSync(filePath, JSON.stringify(toSave, null, 2), "utf-8");
+    fs.writeFileSync(filePath, JSON.stringify(toSave, null, 2), {
+        encoding: "utf-8",
+        mode: 0o600,
+    });
+    try {
+        fs.chmodSync(filePath, 0o600);
+    }
+    catch { }
 }
 /**
  * Clears stored credentials and marks state as logged out.

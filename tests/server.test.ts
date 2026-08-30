@@ -20,7 +20,7 @@ describe("Bridge HTTP Server", () => {
 
     const data = await res.json();
     expect(data.status).toBe("ok");
-    expect(data.service).toBe("omp-extension-zed-bridge");
+    expect(data.service).toBe("omp-zed-bridge");
   });
 
   it("serves /v1/models endpoint listing Zed models", async () => {
