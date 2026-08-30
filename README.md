@@ -9,14 +9,14 @@
 - **Seamless Provider Integration**: Registers the `zed/` provider in OMP with one-click model access.
 - **Complete Model Catalog (16 Models Supported)**:
   - **Anthropic Claude Series**:
-    - `zed/claude-sonnet-5` *(Latest, 1M context)*
+    - `zed/claude-sonnet-5` *(Latest — 1M context)*
     - `zed/claude-sonnet-4-6` *(1M context)*
     - `zed/claude-sonnet-4-5` *(200k context)*
     - `zed/claude-haiku-4-5` *(200k context)*
   - **OpenAI GPT Series**:
-    - `zed/gpt-5.6-sol` *(Latest reasoning model, 400k context)*
-    - `zed/gpt-5.6-terra` *(Latest, 400k context)*
-    - `zed/gpt-5.6-luna` *(Latest, 400k context)*
+    - `zed/gpt-5.6-sol` *(Latest reasoning model — 400k context)*
+    - `zed/gpt-5.6-terra` *(Latest — 400k context)*
+    - `zed/gpt-5.6-luna` *(Latest — 400k context)*
     - `zed/gpt-5.5` *(400k context)*
     - `zed/gpt-5.4` *(400k context)*
     - `zed/gpt-5.3-codex` *(400k context)*
@@ -24,8 +24,8 @@
     - `zed/gpt-5-mini` *(400k context)*
     - `zed/gpt-5-nano` *(400k context)*
   - **Google Gemini Series**:
-    - `zed/gemini-3.1-pro` *(Latest, 200k context)*
-    - `zed/gemini-3.5-flash` *(Latest, 1M context)*
+    - `zed/gemini-3.1-pro` *(Latest — 200k context)*
+    - `zed/gemini-3.5-flash` *(Latest — 1M context)*
     - `zed/gemini-3-flash` *(1M context)*
 - **Built-in Token & Usage Tracker**: Run `/zed usage` or `/zed status` inside OMP to track your monthly credit consumption, remaining quota, and billing cycle.
 - **Flexible Auth**: Support for browser OAuth login, local Credential Manager detection, or manual session token input.
@@ -35,40 +35,53 @@
 
 ## 📦 Installation
 
-### As an OMP Extension
+Install directly into Oh My Pi from GitHub using the OMP Marketplace:
 
-Install using OMP's plugin/extension link or add to your `~/.omp/agent/config.yml`:
+### Option 1: From the Terminal (CLI)
 
-```yaml
-# ~/.omp/agent/config.yml
-extensions:
-  - path: "C:/Users/user/Desktop/Projects/omp-extension-zed"
+```bash
+omp plugin marketplace add Baylar55/omp-extension-zed
+omp plugin install zed@zed-extension
 ```
 
-Or link directly via OMP:
-```bash
-omp plugin link C:/Users/user/Desktop/Projects/omp-extension-zed
+### Option 2: Inside an Active OMP Session (Interactive)
+
+```text
+/marketplace add Baylar55/omp-extension-zed
+/marketplace install zed@zed-extension
 ```
 
 ---
 
 ## 🔑 Authentication
 
-Authenticate your Zed account inside OMP using either:
+Once installed, authenticate your Zed account inside OMP using either:
 
 1. **Interactive Slash Command**:
    ```text
-   /zed login
-   ```
-   Or standard OMP login:
-   ```text
    /login zed
    ```
+   *(Or `/zed login`)*
+   This will open your browser to authorize your account.
 2. **Environment Variable**:
-   Set `ZED_AUTH_TOKEN` or `ZED_SESSION_COOKIE`:
+   You can also set your token or session cookie as an environment variable:
    ```bash
    export ZED_AUTH_TOKEN="your_token_here"
    ```
+
+---
+
+## 💡 Quick Usage
+
+Launch OMP directly with any of your Zed models:
+
+```bash
+omp --model zed/gpt-5.6-sol
+omp --model zed/claude-sonnet-5
+omp --model zed/gemini-3.5-flash
+```
+
+Or switch models interactively within your session using the model picker.
 
 ---
 
@@ -100,6 +113,20 @@ This displays:
 
 ---
 
+## 👨‍💻 Local Development & Contributing
+
+If you are developing or modifying the extension locally:
+
+```bash
+git clone https://github.com/Baylar55/omp-extension-zed.git
+cd omp-extension-zed
+npm install
+npm run build
+omp plugin link .
+```
+
+---
+
 ## 📄 License
 
-MIT © Baylar Sadigov
+MIT © [Baylar Sadigov](https://github.com/Baylar55)
