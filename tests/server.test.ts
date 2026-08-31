@@ -6,7 +6,7 @@ describe("Bridge HTTP Server", () => {
   let bridge: BridgeServerInstance;
 
   beforeAll(async () => {
-    credStore.clearCredentials();
+    credStore.deleteCredentialsFile();
     bridge = await startBridgeServer(0);
   });
 

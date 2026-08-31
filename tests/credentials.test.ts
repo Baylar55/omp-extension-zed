@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  clearCredentials,
+  deleteCredentialsFile,
   getCredentialsFilePath,
   loadCredentials,
   maskSecret,
   saveCredentials,
 } from "../src/auth/credential-store.js";
+const clearCredentials = deleteCredentialsFile;
 
 describe("Credential store", () => {
   afterEach(() => {

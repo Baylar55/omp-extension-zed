@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { startBridgeServer } from "../src/bridge/server.js";
-import { saveCredentials, clearCredentials } from "../src/auth/credential-store.js";
+import { saveCredentials, deleteCredentialsFile } from "../src/auth/credential-store.js";
+const clearCredentials = deleteCredentialsFile;
 import { ZED_ENDPOINT } from "../src/bridge/types.js";
 
 // Helper to mock Zed NDJSON streaming response

@@ -14,21 +14,20 @@ export interface BridgeServerInstance {
 
 const MAX_PAYLOAD_BYTES = 15 * 1024 * 1024; // 15 MB
 
-function isTrustedOrigin(origin: string | undefined): boolean {
-  if (!origin) return true; // Local non-browser CLI / tools (OMP, curl, node fetch)
+function isLoopback(input: string | undefined): boolean {
+  if (!input) return true;
+  const trimmed = input.trim().toLowerCase();
+  // explicit IPv6 loopback — split(":")[0] fails for ::1 / [::1]:port
+  if (trimmed === "::1" || trimmed.startsWith("[::1]")) return true;
   try {
-    const parsed = new URL(origin);
-    const host = parsed.hostname.toLowerCase();
-    return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "[::1]";
+    if (input.includes("://")) return new URL(input).hostname.toLowerCase() === "127.0.0.1" || new URL(input).hostname.toLowerCase() === "localhost" || new URL(input).hostname.toLowerCase() === "::1";
+    // try URL parse with dummy scheme (handles [::1]:38142, 127.0.0.1:3000, localhost:3000)
+    const host = new URL(`http://${trimmed}`).hostname.toLowerCase();
+    return host === "127.0.0.1" || host === "localhost" || host === "::1";
   } catch {
-    return false;
+    const host = trimmed.split(":")[0]!.replace(/^\[|\]$/g, "");
+    return host === "127.0.0.1" || host === "localhost" || host === "::1";
   }
-}
-
-function isTrustedHost(hostHeader: string | undefined): boolean {
-  if (!hostHeader) return true;
-  const cleanHost = hostHeader.split(":")[0]?.toLowerCase();
-  return cleanHost === "127.0.0.1" || cleanHost === "localhost" || cleanHost === "::1" || cleanHost === "[::1]";
 }
 
 /**
@@ -38,18 +37,15 @@ export async function startBridgeServer(preferredPort = 38142): Promise<BridgeSe
   const client = new ZedCloudClient();
 
   const server = http.createServer(async (req, res) => {
-    // 1. Validate Host header to prevent DNS rebinding attacks
     const hostHeader = req.headers["host"];
-    if (!isTrustedHost(hostHeader)) {
+    if (!isLoopback(hostHeader)) {
       res.writeHead(403, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: { message: "Forbidden: untrusted host header", type: "security_error" } }));
       return;
     }
-
-    // 2. Validate Origin header to prevent drive-by cross-origin attacks from external websites
     const originHeader = req.headers["origin"] as string | undefined;
     if (originHeader) {
-      if (!isTrustedOrigin(originHeader)) {
+      if (!isLoopback(originHeader)) {
         res.writeHead(403, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: { message: "Forbidden: cross-origin requests from external web origins are not permitted", type: "security_error" } }));
         return;
@@ -288,36 +284,23 @@ export async function startBridgeServer(preferredPort = 38142): Promise<BridgeSe
     res.end(JSON.stringify({ error: { message: "Not found" } }));
   });
 
-  return new Promise<BridgeServerInstance>((resolve, reject) => {
-    // Try preferred port, or fall back to port 0 (dynamic available port)
-    server.listen(preferredPort, "127.0.0.1", () => {
-      const address = server.address();
-      const actualPort = typeof address === "object" && address ? address.port : preferredPort;
-      const baseUrl = `http://127.0.0.1:${actualPort}/v1`;
-
-      resolve({
-        port: actualPort,
-        baseUrl,
-        stop: () => new Promise<void>((res) => server.close(() => res())),
-      });
-    });
-
-    server.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "EADDRINUSE") {
-        // Fall back to dynamic OS-assigned port
+  const listen = (port: number) => new Promise<number>((resolve, reject) => {
+    const onErr = (err: NodeJS.ErrnoException) => {
+      if ((err as NodeJS.ErrnoException).code === "EADDRINUSE") {
+        server.once("error", reject);
         server.listen(0, "127.0.0.1", () => {
-          const address = server.address();
-          const actualPort = typeof address === "object" && address ? address.port : 0;
-          const baseUrl = `http://127.0.0.1:${actualPort}/v1`;
-          resolve({
-            port: actualPort,
-            baseUrl,
-            stop: () => new Promise<void>((res) => server.close(() => res())),
-          });
+          const a = server.address();
+          resolve(typeof a === "object" && a ? a.port : 0);
         });
-      } else {
-        reject(err);
-      }
+      } else reject(err);
+    };
+    server.once("error", onErr);
+    server.listen(port, "127.0.0.1", () => {
+      server.off("error", onErr);
+      const a = server.address();
+      resolve(typeof a === "object" && a ? a.port : port);
     });
   });
+  const actualPort = await listen(preferredPort);
+  return { port: actualPort, baseUrl: `http://127.0.0.1:${actualPort}/v1`, stop: () => new Promise<void>((r) => server.close(() => r())) };
 }

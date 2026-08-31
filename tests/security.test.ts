@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import { startBridgeServer, type BridgeServerInstance } from "../src/bridge/server.js";
 import { isValidZedUrl } from "../src/auth/oauth.js";
-import { getCredentialsFilePath, saveCredentials, clearCredentials } from "../src/auth/credential-store.js";
+import { getCredentialsFilePath, saveCredentials, deleteCredentialsFile } from "../src/auth/credential-store.js";
+const clearCredentials = deleteCredentialsFile;
 
 describe("Security hardening tests", () => {
   let bridge: BridgeServerInstance;

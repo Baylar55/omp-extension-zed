@@ -40,7 +40,7 @@ export interface ZedUsageReport {
     raw?: unknown;
 }
 /**
- * Fetches and parses live usage/account info from Zed Cloud using available credentials.
+ * Fetches live usage from Zed Cloud. Single canonical endpoint only.
  */
 export declare function fetchZedUsage(creds: ZedCredentials | null | undefined): Promise<ZedUsageReport | null>;
 /**

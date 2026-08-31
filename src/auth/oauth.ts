@@ -4,6 +4,7 @@ import * as url from "node:url";
 import { execFile } from "node:child_process";
 import type { ZedCredentials } from "./types.js";
 import { saveCredentials } from "./credential-store.js";
+import { isPlausibleJwt } from "./token.js";
 
 const DEFAULT_CALLBACK_PORT = 35711;
 
@@ -26,13 +27,8 @@ export function isValidZedUrl(targetUrl: string): boolean {
   }
 }
 
-function escapeHtml(unsafe: string): string {
-  return unsafe
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
 function isLocalHost(hostHeader: string | undefined): boolean {
@@ -81,83 +77,12 @@ function generateZedKeypair(): {
   return { publicKeyBase64Url, privateKeyPem: privateKey };
 }
 
-/**
- * Decrypts the Base64URL-encoded token sent back by zed.dev.
- * Tries multiple encodings (base64url, base64) and paddings (PKCS1, OAEP)
- * because Zed's behavior has varied across versions.
- */
 function decryptZedToken(encryptedTokenBase64Url: string, privateKeyPem: string): string {
-  const candidates: Buffer[] = [];
-  // Try base64url first, then standard base64, then URL-decoded
-  const trimmed = encryptedTokenBase64Url.trim();
-  const urlDecoded = decodeURIComponent(trimmed);
-  for (const enc of [trimmed, urlDecoded]) {
-    for (const encoding of ["base64url", "base64"] as const) {
-      try {
-        const buf = Buffer.from(enc, encoding);
-        if (buf.length === 256 || buf.length === 128) {
-          candidates.push(buf);
-        } else if (buf.length > 0) {
-          candidates.push(buf);
-        }
-      } catch {}
-    }
-  }
-  // Deduplicate
-  const seen = new Set<string>();
-  const unique: Buffer[] = [];
-  for (const b of candidates) {
-    const key = b.toString("base64");
-    if (!seen.has(key)) {
-      seen.add(key);
-      unique.push(b);
-    }
-  }
-
-  const paddings = [
-    crypto.constants.RSA_PKCS1_PADDING,
-    crypto.constants.RSA_PKCS1_OAEP_PADDING,
-  ];
-
-  let lastErr: unknown;
-  for (const buf of unique) {
-    for (const padding of paddings) {
-      try {
-        const opts: any = {
-          key: privateKeyPem,
-          padding,
-        };
-        if (padding === crypto.constants.RSA_PKCS1_OAEP_PADDING) {
-          // Try both sha1 and sha256 for OAEP
-          for (const oaepHash of ["sha1", "sha256"] as const) {
-            try {
-              const decrypted = crypto.privateDecrypt(
-                { ...opts, oaepHash } as any,
-                buf,
-              );
-              const text = decrypted.toString("utf-8").trim();
-              if (text) return text;
-            } catch (e) {
-              lastErr = e;
-            }
-          }
-          continue;
-        }
-        const decrypted = crypto.privateDecrypt(opts as any, buf);
-        const text = decrypted.toString("utf-8").trim();
-        if (text) return text;
-      } catch (e) {
-        lastErr = e;
-      }
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  const buf = Buffer.from(encryptedTokenBase64Url.trim(), "base64url");
+  const dec = crypto.privateDecrypt({ key: privateKeyPem, padding: crypto.constants.RSA_PKCS1_PADDING }, buf);
+  return dec.toString("utf-8").trim();
 }
 
-function isPlausibleJwt(token: string): boolean {
-  const t = token.trim();
-  return t.startsWith("eyJ") && t.split(".").length === 3 && t.length > 20;
-}
 
 /**
  * Runs a local loopback server and initiates Zed's native RSA PKCS#1 sign-in flow.
@@ -211,19 +136,6 @@ export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT): Pro
               server.close();
               reject(new Error(`Failed to decrypt Zed token: ${e instanceof Error ? e.message : String(e)}`));
               return;
-            }
-          } else {
-            // Try decryption opportunistically for any non-JWT token that might be encrypted
-            if (!isPlausibleJwt(accessToken) && accessToken.length > 100) {
-              try {
-                const maybe = decryptZedToken(accessToken, privateKeyPem);
-                if (isPlausibleJwt(maybe) || maybe.trim().startsWith("{")) {
-                  accessToken = maybe;
-                  wasEncrypted = true;
-                }
-              } catch {
-                // keep original
-              }
             }
           }
 

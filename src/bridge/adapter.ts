@@ -8,87 +8,28 @@ import type {
   ZedAssistantRequest,
 } from "./types.js";
 
-export const ZED_VERSION = "0.228.0+stable.203.8421009ef8a022df1196d54bb42fd94366ec0988";
+const MODEL_ALIASES: Record<string, string> = {
+  "claude-sonnet-5": "claude-sonnet-5",
+  "claude-sonnet-4-6": "claude-sonnet-4-6",
+  "claude-sonnet-4-5": "claude-sonnet-4-5",
+  "claude-haiku-4-5": "claude-haiku-4-5",
+  "gpt-5-6-sol": "gpt-5.6-sol", "gpt-5-6-terra": "gpt-5.6-terra", "gpt-5-6-luna": "gpt-5.6-luna",
+  "gpt-5-5": "gpt-5.5", "gpt-5-4": "gpt-5.4", "gpt-5-3-codex": "gpt-5.3-codex", "gpt-5-2": "gpt-5.2",
+  "gpt-5-mini": "gpt-5-mini", "gpt-5-nano": "gpt-5-nano",
+  "gemini-3-1-pro": "gemini-3.1-pro-preview", "gemini-3-1-pro-preview": "gemini-3.1-pro-preview",
+  "gemini-3-5-flash": "gemini-3.5-flash", "gemini-3-flash": "gemini-3-flash", "gemini-3-0-flash": "gemini-3-flash",
+  luna: "gpt-5.6-luna", "gpt-luna": "gpt-5.6-luna", sol: "gpt-5.6-sol", "gpt-sol": "gpt-5.6-sol", terra: "gpt-5.6-terra", "gpt-terra": "gpt-5.6-terra",
+};
 
-/**
- * Maps public/OMP model IDs to internal Zed model identifiers.
- */
 export function normalizeModelId(modelId: string): string {
-  const cleanId = modelId.replace(/^zed\//, "");
-  switch (cleanId) {
-    // Claude series (Zed catalog uses hyphenated version numbers)
-    case "claude-sonnet-5":
-      return "claude-sonnet-5";
-    case "claude-sonnet-4-6":
-    case "claude-sonnet-4.6":
-      return "claude-sonnet-4-6";
-    case "claude-sonnet-4-5":
-    case "claude-sonnet-4.5":
-      return "claude-sonnet-4-5";
-    case "claude-haiku-4-5":
-    case "claude-haiku-4.5":
-      return "claude-haiku-4-5";
-
-    // GPT-5.6 Sol, Terra, Luna
-    case "gpt-5-6-sol":
-    case "gpt-5.6-sol":
-      return "gpt-5.6-sol";
-    case "gpt-5-6-terra":
-    case "gpt-5.6-terra":
-      return "gpt-5.6-terra";
-    case "gpt-5-6-luna":
-    case "gpt-5.6-luna":
-      return "gpt-5.6-luna";
-
-    // GPT series
-    case "gpt-5-5":
-    case "gpt-5.5":
-      return "gpt-5.5";
-    case "gpt-5-4":
-    case "gpt-5.4":
-      return "gpt-5.4";
-    case "gpt-5-3-codex":
-    case "gpt-5.3-codex":
-      return "gpt-5.3-codex";
-    case "gpt-5-2":
-    case "gpt-5.2":
-      return "gpt-5.2";
-    case "gpt-5-mini":
-      return "gpt-5-mini";
-    case "gpt-5-nano":
-      return "gpt-5-nano";
-
-    // Gemini series - note: Zed catalog uses preview suffix for 3.1
-    case "gemini-3-1-pro":
-    case "gemini-3.1-pro":
-    case "gemini-3-1-pro-preview":
-    case "gemini-3.1-pro-preview":
-      return "gemini-3.1-pro-preview";
-    case "gemini-3-5-flash":
-    case "gemini-3.5-flash":
-      return "gemini-3.5-flash";
-    case "gemini-3-flash":
-    case "gemini-3.0-flash":
-      return "gemini-3-flash";
-
-    // Short aliases (harness may send bare names)
-    case "luna":
-    case "gpt-luna":
-    case "sol":
-    case "gpt-sol":
-      return cleanId.includes("luna") ? "gpt-5.6-luna" : "gpt-5.6-sol";
-    case "terra":
-    case "gpt-terra":
-      return "gpt-5.6-terra";
-
-    default: {
-      const lower = cleanId.toLowerCase();
-      if (lower === "luna" || lower.endsWith("/luna") || lower.includes("luna")) return "gpt-5.6-luna";
-      if (lower === "sol" || lower.endsWith("/sol") || lower.includes("sol")) return "gpt-5.6-sol";
-      if (lower === "terra" || lower.endsWith("/terra") || lower.includes("terra")) return "gpt-5.6-terra";
-      return cleanId;
-    }
-  }
+  const raw = modelId.replace(/^zed\//i, "").toLowerCase();
+  const key = raw.replace(/\./g, "-");
+  if (MODEL_ALIASES[key]) return MODEL_ALIASES[key]!;
+  if (MODEL_ALIASES[raw]) return MODEL_ALIASES[raw]!;
+  if (key.includes("luna")) return "gpt-5.6-luna";
+  if (key.includes("sol")) return "gpt-5.6-sol";
+  if (key.includes("terra")) return "gpt-5.6-terra";
+  return raw;
 }
 
 /**
@@ -120,11 +61,16 @@ export function extractTextContent(content: OpenAIMessage["content"]): string {
 
 function safeJsonParse(str: string | undefined): unknown | null {
   if (!str) return null;
-  try {
-    return JSON.parse(str);
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(str); } catch { return null; }
+}
+function parseDataUrl(url: string): { mime: string; data: string } | null {
+  const m = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
+  return m ? { mime: m[1]!, data: m[2]! } : null;
+}
+function toolContent(m: OpenAIMessage): string {
+  if (typeof m.content === "string") return m.content;
+  if (Array.isArray(m.content)) return m.content.map((b) => (b as { text?: string }).text ?? "").join("");
+  return m.content ? JSON.stringify(m.content) : "";
 }
 
 function extractSystemAndMessages(messages: OpenAIMessage[]): {
@@ -178,84 +124,28 @@ function buildAnthropicRequest(
   systemPrompt: string,
   maxTokens: number,
 ): ZedAssistantRequest["provider_request"] {
-  const anthropicMessages: Array<{ role: string; content: unknown[] }> = [];
-
+  const messages: Array<{ role: string; content: unknown[] }> = [];
   for (const m of cleanMessages) {
     if (m.role === "user") {
       const blocks: unknown[] = [];
-      if (typeof m.content === "string") {
-        if (m.content) blocks.push({ type: "text", text: m.content });
-      } else if (Array.isArray(m.content)) {
-        for (const b of m.content) {
-          if (!b) continue;
-          const item = b as { type: string; text?: string; image_url?: { url: string } };
-          if (item.type === "text" && item.text) {
-            blocks.push({ type: "text", text: item.text });
-          } else if (item.type === "image_url") {
-            const url = item.image_url?.url || "";
-            const match = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
-            if (match) {
-              blocks.push({
-                type: "image",
-                source: { type: "base64", media_type: match[1], data: match[2] },
-              });
-            }
-          }
-        }
+      if (typeof m.content === "string") { if (m.content) blocks.push({ type: "text", text: m.content }); }
+      else if (Array.isArray(m.content)) for (const b of m.content as Array<{ type: string; text?: string; image_url?: { url: string } }>) {
+        if (!b) continue;
+        if (b.type === "text" && b.text) blocks.push({ type: "text", text: b.text });
+        else if (b.type === "image_url") { const d = parseDataUrl(b.image_url?.url || ""); if (d) blocks.push({ type: "image", source: { type: "base64", media_type: d.mime, data: d.data } }); }
       }
-      if (blocks.length > 0) {
-        anthropicMessages.push({ role: "user", content: blocks });
-      }
+      if (blocks.length) messages.push({ role: "user", content: blocks });
     } else if (m.role === "assistant") {
       const blocks: unknown[] = [];
-      const text = extractTextContent(m.content);
-      if (text) blocks.push({ type: "text", text });
-      for (const tc of m.tool_calls || []) {
-        blocks.push({
-          type: "tool_use",
-          id: tc.id || crypto.randomUUID(),
-          name: tc.function?.name,
-          input: safeJsonParse(tc.function?.arguments) || {},
-        });
-      }
-      if (blocks.length > 0) {
-        anthropicMessages.push({ role: "assistant", content: blocks });
-      }
+      const text = extractTextContent(m.content); if (text) blocks.push({ type: "text", text });
+      for (const tc of m.tool_calls || []) blocks.push({ type: "tool_use", id: tc.id || crypto.randomUUID(), name: tc.function?.name, input: safeJsonParse(tc.function?.arguments) || {} });
+      if (blocks.length) messages.push({ role: "assistant", content: blocks });
     } else if (m.role === "tool") {
-      let text = "";
-      if (typeof m.content === "string") text = m.content;
-      else if (Array.isArray(m.content)) text = m.content.map((b) => (b as { text?: string }).text ?? "").join("");
-      else if (m.content) text = JSON.stringify(m.content);
-      anthropicMessages.push({
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: m.tool_call_id,
-            content: [{ type: "text", text: text || "" }],
-          },
-        ],
-      });
+      messages.push({ role: "user", content: [{ type: "tool_result", tool_use_id: m.tool_call_id, content: [{ type: "text", text: toolContent(m) || "" }] }] });
     }
   }
-
-  let mappedTools: unknown[] | undefined;
-  if (tools && tools.length > 0) {
-    mappedTools = tools.map((t) => ({
-      name: t.function.name,
-      description: t.function.description,
-      input_schema: t.function.parameters || { type: "object", properties: {} },
-    }));
-  }
-
-  return {
-    model: modelId,
-    stream: true,
-    max_tokens: maxTokens,
-    messages: anthropicMessages,
-    ...(systemPrompt ? { system: systemPrompt } : {}),
-    ...(mappedTools && mappedTools.length > 0 ? { tools: mappedTools } : {}),
-  };
+  const mappedTools = tools?.length ? tools.map((t) => ({ name: t.function.name, description: t.function.description, input_schema: t.function.parameters || { type: "object", properties: {} } })) : undefined;
+  return { model: modelId, stream: true, max_tokens: maxTokens, messages, ...(systemPrompt ? { system: systemPrompt } : {}), ...(mappedTools?.length ? { tools: mappedTools } : {}) };
 }
 
 function buildOpenAiRequest(
@@ -266,77 +156,25 @@ function buildOpenAiRequest(
   maxTokens: number,
 ): ZedAssistantRequest["provider_request"] {
   const input: unknown[] = [];
-
   for (const m of cleanMessages) {
     if (m.role === "user") {
       const blocks: unknown[] = [];
-      if (typeof m.content === "string") {
-        if (m.content) blocks.push({ type: "input_text", text: m.content });
-      } else if (Array.isArray(m.content)) {
-        for (const b of m.content) {
-          if (!b) continue;
-          const item = b as { type: string; text?: string; image_url?: { url?: string } | string };
-          if ((item.type === "text" || item.type === "input_text") && item.text) {
-            blocks.push({ type: "input_text", text: item.text });
-          } else if (item.type === "image_url" || item.type === "input_image") {
-            const url = typeof item.image_url === "object" ? item.image_url?.url : item.image_url;
-            if (url) {
-              blocks.push({ type: "input_image", image_url: url });
-            }
-          }
-        }
+      if (typeof m.content === "string") { if (m.content) blocks.push({ type: "input_text", text: m.content }); }
+      else if (Array.isArray(m.content)) for (const b of m.content as Array<{ type: string; text?: string; image_url?: { url?: string } | string }>) {
+        if (!b) continue;
+        if ((b.type === "text" || b.type === "input_text") && b.text) blocks.push({ type: "input_text", text: b.text });
+        else if (b.type === "image_url" || b.type === "input_image") { const url = typeof b.image_url === "object" ? b.image_url?.url : b.image_url; if (url) blocks.push({ type: "input_image", image_url: url }); }
       }
-      if (blocks.length > 0) {
-        input.push({ type: "message", role: "user", content: blocks });
-      }
+      if (blocks.length) input.push({ type: "message", role: "user", content: blocks });
     } else if (m.role === "assistant") {
-      const text = extractTextContent(m.content);
-      if (text) {
-        input.push({
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text }],
-        });
-      }
-      for (const tc of m.tool_calls || []) {
-        input.push({
-          type: "function_call",
-          call_id: tc.id || crypto.randomUUID(),
-          name: tc.function?.name || "unknown",
-          arguments: tc.function?.arguments || "{}",
-        });
-      }
+      const text = extractTextContent(m.content); if (text) input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text }] });
+      for (const tc of m.tool_calls || []) input.push({ type: "function_call", call_id: tc.id || crypto.randomUUID(), name: tc.function?.name || "unknown", arguments: tc.function?.arguments || "{}" });
     } else if (m.role === "tool") {
-      let text = "";
-      if (typeof m.content === "string") text = m.content;
-      else if (Array.isArray(m.content)) text = m.content.map((b) => (b as { text?: string }).text ?? "").join("");
-      else if (m.content) text = JSON.stringify(m.content);
-      input.push({
-        type: "function_call_output",
-        call_id: m.tool_call_id,
-        output: text || "",
-      });
+      input.push({ type: "function_call_output", call_id: m.tool_call_id, output: toolContent(m) || "" });
     }
   }
-
-  let mappedTools: unknown[] | undefined;
-  if (tools && tools.length > 0) {
-    mappedTools = tools.map((t) => ({
-      type: "function",
-      name: t.function.name,
-      description: t.function.description,
-      parameters: t.function.parameters || { type: "object", properties: {} },
-    }));
-  }
-
-  return {
-    model: modelId,
-    stream: true,
-    input,
-    max_output_tokens: maxTokens,
-    ...(systemPrompt ? { instructions: systemPrompt } : {}),
-    ...(mappedTools && mappedTools.length > 0 ? { tools: mappedTools } : {}),
-  };
+  const mappedTools = tools?.length ? tools.map((t) => ({ type: "function", name: t.function.name, description: t.function.description, parameters: t.function.parameters || { type: "object", properties: {} } })) : undefined;
+  return { model: modelId, stream: true, input, max_output_tokens: maxTokens, ...(systemPrompt ? { instructions: systemPrompt } : {}), ...(mappedTools?.length ? { tools: mappedTools } : {}) };
 }
 
 function buildGoogleRequest(
@@ -347,93 +185,32 @@ function buildGoogleRequest(
   maxTokens: number,
 ): ZedAssistantRequest["provider_request"] {
   const contents: unknown[] = [];
-  // Map of tool_call_id -> tool_name to help associate tool responses
   const toolNameMap = new Map<string, string>();
-
   for (const m of cleanMessages) {
     if (m.role === "user") {
       const parts: unknown[] = [];
-      if (typeof m.content === "string") {
-        if (m.content) parts.push({ text: m.content });
-      } else if (Array.isArray(m.content)) {
-        for (const b of m.content) {
-          if (!b) continue;
-          const item = b as { type: string; text?: string; image_url?: { url: string } };
-          if (item.type === "text" && item.text) {
-            parts.push({ text: item.text });
-          } else if (item.type === "image_url") {
-            const url = item.image_url?.url || "";
-            const match = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
-            if (match) {
-              parts.push({
-                inlineData: { mimeType: match[1], data: match[2] },
-              });
-            }
-          }
-        }
+      if (typeof m.content === "string") { if (m.content) parts.push({ text: m.content }); }
+      else if (Array.isArray(m.content)) for (const b of m.content as Array<{ type: string; text?: string; image_url?: { url: string } }>) {
+        if (!b) continue;
+        if (b.type === "text" && b.text) parts.push({ text: b.text });
+        else if (b.type === "image_url") { const d = parseDataUrl(b.image_url?.url || ""); if (d) parts.push({ inlineData: { mimeType: d.mime, data: d.data } }); }
       }
-      if (parts.length > 0) {
-        contents.push({ role: "user", parts });
-      }
+      if (parts.length) contents.push({ role: "user", parts });
     } else if (m.role === "assistant") {
       const parts: unknown[] = [];
-      const text = extractTextContent(m.content);
-      if (text) parts.push({ text });
+      const text = extractTextContent(m.content); if (text) parts.push({ text });
       for (const tc of m.tool_calls || []) {
-        if (tc.id && tc.function?.name) {
-          toolNameMap.set(tc.id, tc.function.name);
-        }
-        parts.push({
-          functionCall: {
-            name: tc.function?.name || "unknown",
-            args: safeJsonParse(tc.function?.arguments) || {},
-          },
-        });
+        if (tc.id && tc.function?.name) toolNameMap.set(tc.id, tc.function.name);
+        parts.push({ functionCall: { name: tc.function?.name || "unknown", args: safeJsonParse(tc.function?.arguments) || {} } });
       }
-      if (parts.length > 0) {
-        contents.push({ role: "model", parts });
-      }
+      if (parts.length) contents.push({ role: "model", parts });
     } else if (m.role === "tool") {
-      let text = "";
-      if (typeof m.content === "string") text = m.content;
-      else if (Array.isArray(m.content)) text = m.content.map((b) => (b as { text?: string }).text ?? "").join("");
-      else if (m.content) text = JSON.stringify(m.content);
       const toolName = (m.tool_call_id && toolNameMap.get(m.tool_call_id)) || "tool";
-      contents.push({
-        role: "user",
-        parts: [
-          {
-            functionResponse: {
-              name: toolName,
-              response: { output: text || "" },
-            },
-          },
-        ],
-      });
+      contents.push({ role: "user", parts: [{ functionResponse: { name: toolName, response: { output: toolContent(m) || "" } } }] });
     }
   }
-
-  let mappedTools: unknown[] | undefined;
-  if (tools && tools.length > 0) {
-    mappedTools = [
-      {
-        functionDeclarations: tools.map((t) => ({
-          name: t.function.name,
-          description: t.function.description,
-          parameters: t.function.parameters || { type: "OBJECT", properties: {} },
-        })),
-      },
-    ];
-  }
-
-  return {
-    model: modelId,
-    stream: true,
-    contents,
-    max_output_tokens: maxTokens,
-    ...(systemPrompt ? { systemInstruction: { parts: [{ text: systemPrompt }] } } : {}),
-    ...(mappedTools && mappedTools.length > 0 ? { tools: mappedTools } : {}),
-  };
+  const mappedTools = tools?.length ? [{ functionDeclarations: tools.map((t) => ({ name: t.function.name, description: t.function.description, parameters: t.function.parameters || { type: "OBJECT", properties: {} } })) }] : undefined;
+  return { model: modelId, stream: true, contents, max_output_tokens: maxTokens, ...(systemPrompt ? { systemInstruction: { parts: [{ text: systemPrompt }] } } : {}), ...(mappedTools?.length ? { tools: mappedTools } : {}) };
 }
 
 /**
@@ -444,19 +221,7 @@ export function adaptOpenAIToZed(req: OpenAIChatRequest): ZedAssistantRequest {
   const modelId = normalizeModelId(req.model);
   const provider = getZedProvider(modelId);
   const { cleanMessages, systemPrompt } = extractSystemAndMessages(req.messages);
-
-  let tools: OpenAITool[] | undefined = Array.isArray(req.tools) && req.tools.length > 0 ? req.tools : undefined;
-  // For simple greeting with no tool need, skip tools
-  const isSimpleGreeting =
-    cleanMessages.length === 1 &&
-    cleanMessages[0].role === "user" &&
-    typeof cleanMessages[0].content === "string" &&
-    cleanMessages[0].content.trim().toLowerCase() === "hi";
-
-  if (isSimpleGreeting && tools && tools.length > 0) {
-    tools = undefined;
-  }
-
+  const tools: OpenAITool[] | undefined = Array.isArray(req.tools) && req.tools.length > 0 ? req.tools : undefined;
   const maxTokens = req.max_tokens || req.max_completion_tokens || 16384;
   const temperature = req.temperature ?? 1.0;
 

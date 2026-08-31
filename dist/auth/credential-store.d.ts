@@ -12,17 +12,11 @@ export declare function getCredentialsFilePath(): string;
  */
 export declare function getSystemZedCredentials(): ZedCredentials | null;
 /**
- * Attempts to find a live `zed.session` cookie from local browser profiles (Chrome, Edge, Brave, Firefox).
- */
-export declare function findBrowserSessionCookie(): string | null;
-/**
  * Options for loading credentials.
  */
 export interface LoadCredentialsOptions {
     /** Skip scanning OS keychain / Credential Manager */
     skipSystem?: boolean;
-    /** Allow scanning browser cookie stores (only for explicit sync) */
-    allowBrowserScan?: boolean;
 }
 /**
  * Reads stored credentials from disk, checking environment variables and system keychain.
@@ -32,10 +26,6 @@ export declare function loadCredentials(options?: LoadCredentialsOptions): ZedCr
  * Persists Zed credentials to disk, merging with existing values.
  */
 export declare function saveCredentials(creds: Partial<ZedCredentials>): void;
-/**
- * Clears stored credentials and marks state as logged out.
- */
-export declare function clearCredentials(): boolean;
 /**
  * Removes stored credential file entirely from disk.
  */

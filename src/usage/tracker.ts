@@ -2,30 +2,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ZedCredentials } from "../auth/types.js";
 import { getOmpAgentDir } from "../auth/credential-store.js";
+import { ZED_MODELS } from "../models.js";
 
 export interface ModelPrice {
-  input: number; // USD per 1M input tokens
-  output: number; // USD per 1M output tokens
+  input: number;
+  output: number;
 }
 
 export const MODEL_PRICING: Record<string, ModelPrice> = {
-  "claude-sonnet-5": { input: 3.0, output: 15.0 },
-  "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
-  "claude-sonnet-4-5": { input: 3.0, output: 15.0 },
-  "claude-haiku-4-5": { input: 0.8, output: 4.0 },
-  "gpt-5.6-sol": { input: 2.5, output: 10.0 },
-  "gpt-5.6-terra": { input: 2.5, output: 10.0 },
-  "gpt-5.6-luna": { input: 2.5, output: 10.0 },
-  "gpt-5.5": { input: 2.5, output: 10.0 },
-  "gpt-5.4": { input: 2.5, output: 10.0 },
-  "gpt-5.3-codex": { input: 2.5, output: 10.0 },
-  "gpt-5.2": { input: 2.5, output: 10.0 },
-  "gpt-5-mini": { input: 0.15, output: 0.6 },
-  "gpt-5-nano": { input: 0.15, output: 0.6 },
-  "gemini-3.5-flash": { input: 0.075, output: 0.3 },
-  "gemini-3-flash": { input: 0.075, output: 0.3 },
-  "gemini-3.1-pro-preview": { input: 1.25, output: 5.0 },
-  "default": { input: 3.0, output: 15.0 },
+  ...Object.fromEntries(ZED_MODELS.map((m) => [m.id.toLowerCase(), { input: m.cost.input, output: m.cost.output }])),
+  default: { input: 3.3, output: 16.5 },
 };
 
 export function normalizePlanName(rawPlan?: string): string {
@@ -90,42 +76,24 @@ export function getLocalSpendHistory(): LocalSpendRecord {
   };
 }
 
-export function resetLocalSpendHistory(): void {
-  const currentPeriod = new Date().toISOString().slice(0, 7);
-  const emptyRecord: LocalSpendRecord = {
-    period: currentPeriod,
-    spentAmount: 0.0,
-    totalInputTokens: 0,
-    totalOutputTokens: 0,
-    requestCount: 0,
-    lastUpdated: Date.now(),
-  };
+function saveLocalSpend(record: LocalSpendRecord): void {
   try {
-    const dir = getOmpAgentDir();
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const filePath = getUsageHistoryPath();
-    fs.writeFileSync(filePath, JSON.stringify(emptyRecord, null, 2), {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-    try { fs.chmodSync(filePath, 0o600); } catch {}
+    fs.mkdirSync(getOmpAgentDir(), { recursive: true, mode: 0o700 });
+    const p = getUsageHistoryPath();
+    fs.writeFileSync(p, JSON.stringify(record, null, 2), { encoding: "utf-8", mode: 0o600 });
+    try { fs.chmodSync(p, 0o600); } catch {}
   } catch {}
+}
+
+export function resetLocalSpendHistory(): void {
+  saveLocalSpend({ period: new Date().toISOString().slice(0, 7), spentAmount: 0, totalInputTokens: 0, totalOutputTokens: 0, requestCount: 0, lastUpdated: Date.now() });
 }
 
 export function setLocalSpendAmount(amount: number): void {
   const current = getLocalSpendHistory();
   current.spentAmount = Math.max(0, Number(amount.toFixed(2)));
   current.lastUpdated = Date.now();
-  try {
-    const dir = getOmpAgentDir();
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const filePath = getUsageHistoryPath();
-    fs.writeFileSync(filePath, JSON.stringify(current, null, 2), {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-    try { fs.chmodSync(filePath, 0o600); } catch {}
-  } catch {}
+  saveLocalSpend(current);
 }
 
 export function recordTokenUsage(model: string, inputTokens: number, outputTokens: number): void {
@@ -136,19 +104,7 @@ export function recordTokenUsage(model: string, inputTokens: number, outputToken
   current.totalOutputTokens += outputTokens;
   current.requestCount += 1;
   current.lastUpdated = Date.now();
-
-  try {
-    const dir = getOmpAgentDir();
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const filePath = getUsageHistoryPath();
-    fs.writeFileSync(filePath, JSON.stringify(current, null, 2), {
-      encoding: "utf-8",
-      mode: 0o600,
-    });
-    try { fs.chmodSync(filePath, 0o600); } catch {}
-  } catch {
-    // Ignore save errors
-  }
+  saveLocalSpend(current);
 }
 export interface ZedUsageReport {
   planName: string;
@@ -172,228 +128,53 @@ export interface ZedUsageReport {
 }
 
 /**
- * Fetches and parses live usage/account info from Zed Cloud using available credentials.
+ * Fetches live usage from Zed Cloud. Single canonical endpoint only.
  */
 export async function fetchZedUsage(creds: ZedCredentials | null | undefined): Promise<ZedUsageReport | null> {
-  if (!creds || (!creds.accessToken && !creds.sessionCookie)) {
-    return null;
-  }
-  const headers: Record<string, string> = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Referer": "https://dashboard.zed.dev/",
-    "Origin": "https://dashboard.zed.dev",
-  };
+  if (!creds || (!creds.accessToken && !creds.sessionCookie)) return null;
 
-  // 1. Try Frontend Billing API if session cookie is present in credentials
-  const cookieToTry = creds.sessionCookie;
-
-  const tryBillingWithCookie = async (rawCookie: string): Promise<ZedUsageReport | null> => {
-    const cookieHeader = rawCookie.startsWith("zed.session=") ? rawCookie : `zed.session=${rawCookie}`;
-    const billingEndpoints = [
-      "https://cloud.zed.dev/frontend/billing/usage",
-      "https://cloud.zed.dev/frontend/billing",
-      "https://cloud.zed.dev/frontend/usage",
-    ];
-
-    for (const url of billingEndpoints) {
-      try {
-        const res = await fetch(url, {
-          method: "GET",
-          headers: {
-            ...headers,
-            "Cookie": cookieHeader,
-          },
-        });
-
-        if (res.ok) {
-          const data = (await res.json()) as Record<string, unknown>;
-          const currentUsage = (data["current_usage"] as Record<string, unknown> | undefined) || {};
-          const tokenSpend = (currentUsage["token_spend"] as Record<string, unknown> | undefined) || {};
-          const editPred = (currentUsage["edit_predictions"] as Record<string, unknown> | undefined) || {};
-
-          const planRaw = (data["plan"] as string | undefined) || "";
-          const planName = normalizePlanName(planRaw);
-          const isFree = planName.toLowerCase().includes("free") || planRaw.toLowerCase().includes("free");
-
-          let monthlyCredit = isFree ? 0.0 : 10.0;
-          if (typeof tokenSpend["limit_in_cents"] === "number") {
-            monthlyCredit = Number((tokenSpend["limit_in_cents"] / 100).toFixed(2));
-          } else if (typeof data["credit_limit"] === "number") {
-            monthlyCredit =
-              typeof data["credit_limit"] === "number" && data["credit_limit"] > 100
-                ? Number((data["credit_limit"] / 100).toFixed(2))
-                : Number(data["credit_limit"].toFixed(2));
-          }
-
-          let spentAmount = 0.0;
-          if (typeof tokenSpend["spend_in_cents"] === "number") {
-            spentAmount = Number((tokenSpend["spend_in_cents"] / 100).toFixed(2));
-          } else if (typeof data["token_spend_cents"] === "number") {
-            spentAmount = Number((data["token_spend_cents"] / 100).toFixed(2));
-          } else if (typeof data["current_spend_cents"] === "number") {
-            spentAmount = Number((data["current_spend_cents"] / 100).toFixed(2));
-          } else if (typeof data["current_spend"] === "number") {
-            spentAmount =
-              data["current_spend"] > 100 && monthlyCredit <= 100
-                ? Number((data["current_spend"] / 100).toFixed(2))
-                : Number(data["current_spend"].toFixed(2));
-          } else if (typeof data["spent"] === "number") {
-            spentAmount =
-              data["spent"] > 100 && monthlyCredit <= 100
-                ? Number((data["spent"] / 100).toFixed(2))
-                : Number(data["spent"].toFixed(2));
-          } else if (typeof data["spend"] === "number") {
-            spentAmount = Number(data["spend"].toFixed(2));
-          }
-
-          let remainingCredit = Math.max(0, Number((monthlyCredit - spentAmount).toFixed(2)));
-          if (typeof tokenSpend["remaining_in_cents"] === "number") {
-            remainingCredit = Number((tokenSpend["remaining_in_cents"] / 100).toFixed(2));
-          }
-          const spentPercentage = monthlyCredit > 0 ? Math.min(100, Math.round((spentAmount / monthlyCredit) * 100)) : 0;
-          const resetDate = (data["period_end"] || data["period_end_date"] || data["resets_at"]) as string | undefined;
-
-          return {
-            planName,
-            monthlyCredit,
-            spentAmount,
-            remainingCredit,
-            spentPercentage,
-            resetDate,
-            editPredictions: editPred
-              ? {
-                  used: typeof editPred["used"] === "number" ? editPred["used"] : 0,
-                  limit: editPred["limit"] === null ? "unlimited" : String(editPred["limit"] ?? "unlimited"),
-                }
-              : undefined,
-            hasDetailedBilling: true,
-            raw: data,
-          };
-        }
-      } catch {
-        // Try next endpoint
+  if (creds.sessionCookie) {
+    try {
+      const cookieHeader = creds.sessionCookie.startsWith("zed.session=") ? creds.sessionCookie : `zed.session=${creds.sessionCookie}`;
+      const res = await fetch("https://cloud.zed.dev/frontend/billing/usage", {
+        method: "GET",
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+          Accept: "application/json, text/plain, */*",
+          Referer: "https://dashboard.zed.dev/",
+          Origin: "https://dashboard.zed.dev",
+          Cookie: cookieHeader,
+        },
+      });
+      if (res.ok) {
+        const data = (await res.json()) as Record<string, unknown>;
+        const currentUsage = (data["current_usage"] as Record<string, unknown>) || {};
+        const tokenSpend = (currentUsage["token_spend"] as Record<string, unknown>) || {};
+        const editPred = (currentUsage["edit_predictions"] as Record<string, unknown>) || {};
+        const planRaw = (data["plan"] as string) || "";
+        const planName = normalizePlanName(planRaw);
+        const monthlyCredit = typeof tokenSpend["limit_in_cents"] === "number" ? Number((tokenSpend["limit_in_cents"] / 100).toFixed(2)) : planName.toLowerCase().includes("free") ? 0 : 10;
+        const spentAmount = typeof tokenSpend["spend_in_cents"] === "number" ? Number((tokenSpend["spend_in_cents"] / 100).toFixed(2)) : 0;
+        const remainingCredit = typeof tokenSpend["remaining_in_cents"] === "number" ? Number((tokenSpend["remaining_in_cents"] / 100).toFixed(2)) : Math.max(0, Number((monthlyCredit - spentAmount).toFixed(2)));
+        const spentPercentage = monthlyCredit > 0 ? Math.min(100, Math.round((spentAmount / monthlyCredit) * 100)) : 0;
+        const resetDate = (data["period_end"] || data["period_end_date"] || data["resets_at"]) as string | undefined;
+        return {
+          planName, monthlyCredit, spentAmount, remainingCredit, spentPercentage, resetDate,
+          editPredictions: { used: typeof editPred["used"] === "number" ? editPred["used"] : 0, limit: editPred["limit"] === null ? "unlimited" : String(editPred["limit"] ?? "unlimited") },
+          hasDetailedBilling: true, raw: data,
+        };
       }
-    }
-    return null;
-  };
-
-  if (cookieToTry) {
-    const billingReport = await tryBillingWithCookie(cookieToTry);
-    if (billingReport) {
-      return billingReport;
-    }
+    } catch {}
   }
 
-  // 2. Try Client User Endpoint if access token is present
-  if (creds.accessToken) {
-    let userId = creds.userId;
-    const token = creds.accessToken;
-
-    if (token.startsWith("{")) {
-      try {
-        const parsed = JSON.parse(token) as Record<string, unknown>;
-        if (parsed["legacy_user_id"] || parsed["user_id"]) {
-          userId = userId || String(parsed["legacy_user_id"] || parsed["user_id"]);
-        }
-      } catch {
-        // Ignore JSON parse errors
-      }
-    }
-
-    const authCandidates: string[] = [];
-    if (userId) {
-      authCandidates.push(`${userId} ${token}`);
-    }
-    authCandidates.push(`Bearer ${token}`);
-    authCandidates.push(token);
-
-    const endpoints = [
-      "https://cloud.zed.dev/client/users/me",
-      "https://cloud.zed.dev/api/users/me",
-      "https://api.zed.dev/users/me",
-    ];
-
-    for (const endpoint of endpoints) {
-      for (const authHeader of authCandidates) {
-        try {
-          const res = await fetch(endpoint, {
-            method: "GET",
-            headers: {
-              "Authorization": authHeader,
-              "User-Agent": "Zed",
-              "Accept": "application/json",
-            },
-          });
-
-          if (res.ok) {
-            const data = (await res.json()) as Record<string, unknown>;
-            const user = (data["user"] as Record<string, unknown>) || data;
-            const planObj = (data["plan"] as Record<string, unknown>) || {};
-            const plansByOrg = (data["plans_by_organization"] as Record<string, unknown>) || {};
-            const orgPlan = Object.values(plansByOrg)[0] as string | undefined;
-
-            // Format clean plan name
-            const rawPlan = (planObj["plan_v3"] || orgPlan || planObj["plan_v2"] || planObj["plan"] || user["plan"]) as string | undefined;
-            const planName = normalizePlanName(rawPlan || (user["is_pro"] ? "pro" : undefined));
-            const isFree = planName.toLowerCase().includes("free") || (rawPlan && rawPlan.toLowerCase().includes("free"));
-            const monthlyCredit = isFree ? 0.0 : 10.0;
-
-            const username = (user["github_login"] || user["username"] || user["name"] || creds.githubUsername) as string | undefined;
-            const subPeriod = planObj["subscription_period"] as Record<string, unknown> | undefined;
-            const resetDate = (subPeriod?.["ended_at"] || data["period_end"]) as string | undefined;
-
-            const usageObj = planObj["usage"] as Record<string, unknown> | undefined;
-            const modelReq = usageObj?.["model_requests"] as { used: number; limit: unknown } | undefined;
-            const editPred = usageObj?.["edit_predictions"] as { used: number; limit: unknown } | undefined;
-
-            const localSpend = getLocalSpendHistory();
-            const spentAmount = localSpend.spentAmount > monthlyCredit && monthlyCredit > 0 ? monthlyCredit : Number(localSpend.spentAmount.toFixed(2));
-            const remainingCredit = Math.max(0, Number((monthlyCredit - spentAmount).toFixed(2)));
-            const spentPercentage = monthlyCredit > 0 ? Math.min(100, Math.round((spentAmount / monthlyCredit) * 100)) : 0;
-
-            return {
-              planName,
-              monthlyCredit,
-              spentAmount,
-              remainingCredit,
-              spentPercentage,
-              resetDate,
-              username,
-              userId: String(user["id"] || userId || ""),
-              modelRequests: modelReq ? { used: modelReq.used, limit: typeof modelReq.limit === "object" ? String((modelReq.limit as Record<string, unknown>)?.["limited"] ?? 0) : String(modelReq.limit ?? "") } : undefined,
-              editPredictions: editPred ? { used: editPred.used, limit: String(editPred.limit ?? "unlimited") } : undefined,
-              hasDetailedBilling: false,
-              raw: data,
-            };
-          }
-        } catch {
-          // Try next header / endpoint
-        }
-      }
-    }
-  }
-
-  // 3. Fallback: if we have any valid credentials, return a baseline active report
   if (creds.accessToken || creds.sessionCookie) {
     const localSpend = getLocalSpendHistory();
-    const monthlyCredit = 10.0;
+    const monthlyCredit = 10;
     const spentAmount = Math.min(monthlyCredit, Number(localSpend.spentAmount.toFixed(2)));
     const remainingCredit = Math.max(0, Number((monthlyCredit - spentAmount).toFixed(2)));
     const spentPercentage = monthlyCredit > 0 ? Math.min(100, Math.round((spentAmount / monthlyCredit) * 100)) : 0;
-
-    return {
-      planName: "Zed Student Plan",
-      monthlyCredit,
-      spentAmount,
-      remainingCredit,
-      spentPercentage,
-      username: creds.githubUsername,
-      userId: creds.userId,
-      hasDetailedBilling: false,
-    };
+    return { planName: "Zed Student Plan", monthlyCredit, spentAmount, remainingCredit, spentPercentage, username: creds.githubUsername, userId: creds.userId, hasDetailedBilling: false };
   }
-
   return null;
 }
 /**

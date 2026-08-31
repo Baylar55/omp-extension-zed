@@ -1,8 +1,4 @@
 import type { OpenAIChatChunk, OpenAIChatRequest, OpenAIChatResponse, OpenAIMessage, ZedAssistantRequest } from "./types.js";
-export declare const ZED_VERSION = "0.228.0+stable.203.8421009ef8a022df1196d54bb42fd94366ec0988";
-/**
- * Maps public/OMP model IDs to internal Zed model identifiers.
- */
 export declare function normalizeModelId(modelId: string): string;
 /**
  * Resolves the Zed provider key for a given model id.
