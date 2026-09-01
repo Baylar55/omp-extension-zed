@@ -13,6 +13,7 @@ describe("Credential store", () => {
     clearCredentials();
     delete process.env["ZED_AUTH_TOKEN"];
     delete process.env["ZED_SESSION_COOKIE"];
+    delete process.env["ZED_USER_ID"];
   });
 
   it("masks secrets appropriately", () => {
@@ -36,6 +37,7 @@ describe("Credential store", () => {
     const afterClear = loadCredentials({ skipSystem: true });
     expect(afterClear).toBeNull();
   });
+
   it("prioritizes environment variables when set", () => {
     process.env["ZED_AUTH_TOKEN"] = "env_token_abc";
     process.env["ZED_USER_ID"] = "123456";

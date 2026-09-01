@@ -3,33 +3,27 @@ import * as path from "node:path";
 import { getOmpAgentDir } from "../auth/credential-store.js";
 import { ZED_MODELS } from "../models.js";
 export const MODEL_PRICING = {
-    ...Object.fromEntries(ZED_MODELS.map((m) => [m.id.toLowerCase(), { input: m.cost.input, output: m.cost.output }])),
+    ...Object.fromEntries(ZED_MODELS.map((m) => [m.id, { input: m.cost.input, output: m.cost.output }])),
     default: { input: 3.3, output: 16.5 },
 };
 export function normalizePlanName(rawPlan) {
     if (!rawPlan)
         return "Zed Pro Plan";
-    const lower = rawPlan.toLowerCase().replace(/[_-]/g, " ");
-    if (lower.includes("student")) {
+    const lower = rawPlan.toLowerCase();
+    if (lower.includes("student"))
         return "Zed Student Plan";
-    }
-    if (lower.includes("pro")) {
+    if (lower.includes("pro"))
         return "Zed Pro Plan";
-    }
-    if (lower.includes("free")) {
+    if (lower.includes("free"))
         return "Zed Free Plan";
-    }
-    if (lower.includes("business") || lower.includes("team") || lower.includes("enterprise")) {
+    if (lower.includes("business") || lower.includes("team") || lower.includes("enterprise"))
         return "Zed Business Plan";
-    }
     return `Zed ${rawPlan.charAt(0).toUpperCase() + rawPlan.slice(1)}`;
 }
 export function calculateModelCost(model, inputTokens, outputTokens) {
-    const cleanModel = model.replace(/^zed\//i, "").toLowerCase();
-    const pricing = MODEL_PRICING[cleanModel] || MODEL_PRICING["default"];
-    const inputCost = (inputTokens / 1_000_000) * pricing.input;
-    const outputCost = (outputTokens / 1_000_000) * pricing.output;
-    return inputCost + outputCost;
+    const clean = model.replace(/^zed\//i, "").toLowerCase();
+    const pricing = MODEL_PRICING[clean] || MODEL_PRICING["default"];
+    return (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output;
 }
 export function getUsageHistoryPath() {
     return path.join(getOmpAgentDir(), "zed_usage_history.json");
@@ -39,16 +33,13 @@ export function getLocalSpendHistory() {
     const filePath = getUsageHistoryPath();
     try {
         if (fs.existsSync(filePath)) {
-            const raw = fs.readFileSync(filePath, "utf-8");
-            const parsed = JSON.parse(raw);
+            const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
             if (parsed.period === currentPeriod) {
                 return parsed;
             }
         }
     }
-    catch {
-        // Ignore
-    }
+    catch { }
     return {
         period: currentPeriod,
         spentAmount: 0.0,
@@ -150,7 +141,6 @@ export function formatUsageSummary(report) {
             "To connect your Zed account:",
             "• Run '/zed login' to authenticate via browser",
             "• Or run '/zed set-token <token>' to manually save your token",
-            "• Or log into Zed editor on your machine (auto-detected)",
         ].join("\n");
     }
     const progressBarLength = 20;

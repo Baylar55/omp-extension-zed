@@ -39,7 +39,8 @@ export default async function ompZedExtension(pi: ExtensionAPI): Promise<void> {
   pi.on("session_start", async (_event, ctx) => {
     const creds = loadCredentials();
     if (creds && (creds.accessToken || creds.sessionCookie)) {
-      ctx.ui.notify("Zed Pro extension active. Models ready: zed/claude-sonnet-4-6, zed/gpt-5.4, zed/gemini-3.5-flash", "info");
+      const sampleModels = ZED_MODELS.slice(0, 3).map((m) => `zed/${m.id}`).join(", ");
+      ctx.ui.notify(`Zed Pro extension active. Models ready: ${sampleModels}`, "info");
     } else {
       ctx.ui.notify("Zed Pro extension loaded. Run '/zed login' to connect your Zed student/pro plan.", "info");
     }

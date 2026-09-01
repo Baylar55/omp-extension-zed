@@ -12,7 +12,7 @@ const MODEL_ALIASES = {
     luna: "gpt-5.6-luna", "gpt-luna": "gpt-5.6-luna", sol: "gpt-5.6-sol", "gpt-sol": "gpt-5.6-sol", terra: "gpt-5.6-terra", "gpt-terra": "gpt-5.6-terra",
 };
 export function normalizeModelId(modelId) {
-    const raw = modelId.replace(/^zed\//i, "").toLowerCase();
+    const raw = modelId.replace(/^zed\//i, "").trim().toLowerCase();
     const key = raw.replace(/\./g, "-");
     if (MODEL_ALIASES[key])
         return MODEL_ALIASES[key];
@@ -28,19 +28,14 @@ export function normalizeModelId(modelId) {
 }
 /**
  * Resolves the Zed provider key for a given model id.
- * Verified against GET https://cloud.zed.dev/models (2026-08-12):
- * - anthropic: claude-*
- * - open_ai: gpt-*
- * - google: gemini-*
  */
 export function getZedProvider(modelId) {
     const clean = normalizeModelId(modelId);
-    const lower = clean.toLowerCase();
-    if (lower.startsWith("claude-") || lower.includes("claude"))
+    if (clean.startsWith("claude-"))
         return "anthropic";
-    if (lower.startsWith("gpt-") || lower.includes("gpt") || lower.includes("luna") || lower.includes("sol") || lower.includes("terra"))
+    if (clean.startsWith("gpt-") || clean.includes("luna") || clean.includes("sol") || clean.includes("terra"))
         return "open_ai";
-    if (lower.startsWith("gemini-") || lower.includes("gemini"))
+    if (clean.startsWith("gemini-"))
         return "google";
     return "anthropic";
 }
@@ -76,6 +71,28 @@ function toolContent(m) {
     if (Array.isArray(m.content))
         return m.content.map((b) => b.text ?? "").join("");
     return m.content ? JSON.stringify(m.content) : "";
+}
+function extractUserBlocks(content) {
+    if (typeof content === "string")
+        return content ? [{ text: content }] : [];
+    if (!Array.isArray(content))
+        return [];
+    const blocks = [];
+    for (const b of content) {
+        if (!b)
+            continue;
+        if ((b.type === "text" || b.type === "input_text") && b.text) {
+            blocks.push({ text: b.text });
+        }
+        else if (b.type === "image_url" || b.type === "image" || b.type === "input_image") {
+            const url = typeof b.image_url === "object" ? b.image_url?.url : (typeof b.image_url === "string" ? b.image_url : "");
+            if (url) {
+                const d = parseDataUrl(url);
+                blocks.push(d ? { mime: d.mime, data: d.data, url } : { url });
+            }
+        }
+    }
+    return blocks;
 }
 function extractSystemAndMessages(messages) {
     const systemParts = [];
@@ -118,23 +135,7 @@ function buildAnthropicRequest(modelId, cleanMessages, tools, systemPrompt, maxT
     const messages = [];
     for (const m of cleanMessages) {
         if (m.role === "user") {
-            const blocks = [];
-            if (typeof m.content === "string") {
-                if (m.content)
-                    blocks.push({ type: "text", text: m.content });
-            }
-            else if (Array.isArray(m.content))
-                for (const b of m.content) {
-                    if (!b)
-                        continue;
-                    if (b.type === "text" && b.text)
-                        blocks.push({ type: "text", text: b.text });
-                    else if (b.type === "image_url") {
-                        const d = parseDataUrl(b.image_url?.url || "");
-                        if (d)
-                            blocks.push({ type: "image", source: { type: "base64", media_type: d.mime, data: d.data } });
-                    }
-                }
+            const blocks = extractUserBlocks(m.content).map((b) => b.text !== undefined ? { type: "text", text: b.text } : { type: "image", source: { type: "base64", media_type: b.mime, data: b.data } });
             if (blocks.length)
                 messages.push({ role: "user", content: blocks });
         }
@@ -159,23 +160,7 @@ function buildOpenAiRequest(modelId, cleanMessages, tools, systemPrompt, maxToke
     const input = [];
     for (const m of cleanMessages) {
         if (m.role === "user") {
-            const blocks = [];
-            if (typeof m.content === "string") {
-                if (m.content)
-                    blocks.push({ type: "input_text", text: m.content });
-            }
-            else if (Array.isArray(m.content))
-                for (const b of m.content) {
-                    if (!b)
-                        continue;
-                    if ((b.type === "text" || b.type === "input_text") && b.text)
-                        blocks.push({ type: "input_text", text: b.text });
-                    else if (b.type === "image_url" || b.type === "input_image") {
-                        const url = typeof b.image_url === "object" ? b.image_url?.url : b.image_url;
-                        if (url)
-                            blocks.push({ type: "input_image", image_url: url });
-                    }
-                }
+            const blocks = extractUserBlocks(m.content).map((b) => b.text !== undefined ? { type: "input_text", text: b.text } : { type: "input_image", image_url: b.url });
             if (blocks.length)
                 input.push({ type: "message", role: "user", content: blocks });
         }
@@ -198,23 +183,7 @@ function buildGoogleRequest(modelId, cleanMessages, tools, systemPrompt, maxToke
     const toolNameMap = new Map();
     for (const m of cleanMessages) {
         if (m.role === "user") {
-            const parts = [];
-            if (typeof m.content === "string") {
-                if (m.content)
-                    parts.push({ text: m.content });
-            }
-            else if (Array.isArray(m.content))
-                for (const b of m.content) {
-                    if (!b)
-                        continue;
-                    if (b.type === "text" && b.text)
-                        parts.push({ text: b.text });
-                    else if (b.type === "image_url") {
-                        const d = parseDataUrl(b.image_url?.url || "");
-                        if (d)
-                            parts.push({ inlineData: { mimeType: d.mime, data: d.data } });
-                    }
-                }
+            const parts = extractUserBlocks(m.content).map((b) => b.text !== undefined ? { text: b.text } : { inlineData: { mimeType: b.mime, data: b.data } });
             if (parts.length)
                 contents.push({ role: "user", parts });
         }

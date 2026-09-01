@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, execSync } from "node:child_process";
 import type { ZedCredentials } from "./types.js";
+import { isEncryptedPayload } from "./token.js";
 
 /**
  * Returns the directory where OMP agent configuration and extension secrets reside.
@@ -153,7 +154,6 @@ foreach ($t in $targets) {
   return null;
 }
 
-
 /**
  * Options for loading credentials.
  */
@@ -161,10 +161,9 @@ export interface LoadCredentialsOptions {
   /** Skip scanning OS keychain / Credential Manager */
   skipSystem?: boolean;
 }
-import { isEncryptedPayload } from "./token.js";
 
 /**
- * Reads stored credentials from disk, checking environment variables and system keychain.
+ * Reads stored credentials from disk or environment variables.
  */
 export function loadCredentials(options?: LoadCredentialsOptions): ZedCredentials | null {
   // 1. Check environment variables
@@ -173,9 +172,7 @@ export function loadCredentials(options?: LoadCredentialsOptions): ZedCredential
   const envUserId = process.env["ZED_USER_ID"];
 
   if (envToken || envCookie) {
-    // Validate env token is not an undecrypted payload
     if (envToken && isEncryptedPayload(envToken)) {
-      // Treat as invalid, force re-login
       return null;
     }
     return {
@@ -189,13 +186,16 @@ export function loadCredentials(options?: LoadCredentialsOptions): ZedCredential
 
   // 2. Check stored file in OMP agent directory
   const filePath = getCredentialsFilePath();
-  let fileCreds: ZedCredentials | null = null;
   try {
     if (fs.existsSync(filePath)) {
       const raw = fs.readFileSync(filePath, "utf-8");
       const parsed = JSON.parse(raw) as ZedCredentials;
       if (!parsed.loggedOut && (parsed.accessToken || parsed.sessionCookie)) {
-        fileCreds = {
+        if (parsed.accessToken && isEncryptedPayload(parsed.accessToken)) {
+          try { fs.unlinkSync(filePath); } catch {}
+          return null;
+        }
+        return {
           ...parsed,
           source: parsed.source || "file",
         };
@@ -203,17 +203,6 @@ export function loadCredentials(options?: LoadCredentialsOptions): ZedCredential
     }
   } catch {
     // Ignore corrupt/unreadable files
-  }
-
-  if (fileCreds) {
-    if (fileCreds.accessToken && isEncryptedPayload(fileCreds.accessToken)) {
-      try {
-        const fp = getCredentialsFilePath();
-        if (fs.existsSync(fp)) fs.unlinkSync(fp);
-      } catch {}
-      return null;
-    }
-    return fileCreds;
   }
 
   if (!options?.skipSystem) {
@@ -250,6 +239,7 @@ export function saveCredentials(creds: Partial<ZedCredentials>): void {
     fs.chmodSync(filePath, 0o600);
   } catch {}
 }
+
 /**
  * Removes stored credential file entirely from disk.
  */

@@ -19,7 +19,7 @@ export interface LoadCredentialsOptions {
     skipSystem?: boolean;
 }
 /**
- * Reads stored credentials from disk, checking environment variables and system keychain.
+ * Reads stored credentials from disk or environment variables.
  */
 export declare function loadCredentials(options?: LoadCredentialsOptions): ZedCredentials | null;
 /**

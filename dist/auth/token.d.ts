@@ -1,4 +1,3 @@
-export declare function isJwt(token: string): boolean;
 export declare function isPlausibleJwt(token: string): boolean;
 export declare function isEncryptedPayload(token: string): boolean;
 export declare function decodeJwtExp(token: string): number | null;

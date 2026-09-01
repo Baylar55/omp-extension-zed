@@ -1,6 +1,6 @@
 import * as crypto from "node:crypto";
 import { ZED_ENDPOINT, ZED_VERSION } from "./types.js";
-import { decodeJwtExp, isEncryptedPayload, isJwt, normalizeToken } from "../auth/token.js";
+import { decodeJwtExp, isEncryptedPayload, isPlausibleJwt, normalizeToken } from "../auth/token.js";
 /**
  * Client for dispatching completion requests to Zed Cloud.
  */
@@ -18,7 +18,7 @@ export class ZedCloudClient {
         if (isEncryptedPayload(rawAccess))
             throw new Error("Invalid Zed token: appears to be an encrypted value that was not decrypted. Please run /zed logout then /zed login again.");
         const normalized = normalizeToken(rawAccess);
-        if (isJwt(normalized)) {
+        if (isPlausibleJwt(normalized)) {
             const exp = decodeJwtExp(normalized);
             if (exp && Date.now() + 5 * 60 * 1000 < exp)
                 return normalized;
@@ -53,12 +53,12 @@ export class ZedCloudClient {
                 }
                 else {
                     const text = await resp.text().catch(() => "");
-                    if (!isJwt(normalized))
+                    if (!isPlausibleJwt(normalized))
                         throw new Error(`JWT exchange failed (${resp.status}): ${text}`);
                 }
             }
             catch (e) {
-                if (!isJwt(normalized))
+                if (!isPlausibleJwt(normalized))
                     throw new Error(`Failed to exchange Zed access token for JWT. Please run /zed login again. ${e instanceof Error ? e.message : String(e)}`);
             }
         }
@@ -176,15 +176,7 @@ export class ZedCloudClient {
                             return;
                         }
                     }
-                    if (json && typeof json === "object" && ("candidates" in json || (json.event && typeof json.event.candidates !== "undefined"))) {
-                        yield { error: "Unsupported Gemini stream shape (candidates) — re-add google parser if live. Payload: " + JSON.stringify(json).slice(0, 300) };
-                        return;
-                    }
                     const event = json && typeof json === "object" && "event" in json && json.event && typeof json.event === "object" ? json.event : json;
-                    if (event && typeof event.type === "string" && event.type.startsWith("response.")) {
-                        yield { error: `Unsupported OpenAI Responses shape ${event.type} — re-add response.* parser if live` };
-                        return;
-                    }
                     if (!event || typeof event.type !== "string") {
                         if (json && typeof json === "object" && ("error" in json || "message" in json)) {
                             const errObj = "error" in json ? json.error : undefined;

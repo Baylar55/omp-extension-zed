@@ -2,28 +2,32 @@ import { deleteCredentialsFile, loadCredentials, maskSecret, saveCredentials } f
 import { openBrowser, startOAuthFlow } from "../auth/oauth.js";
 import { ZED_MODELS } from "../models.js";
 import { fetchZedUsage, formatUsageSummary, resetLocalSpendHistory, setLocalSpendAmount } from "../usage/tracker.js";
+function requireCreds(ctx) {
+    const creds = loadCredentials();
+    if (!creds || (!creds.accessToken && !creds.sessionCookie)) {
+        ctx.ui.notify("No Zed credentials found. Please run '/zed login' to connect your Zed account.", "warning");
+        return null;
+    }
+    return creds;
+}
 export function registerZedCommands(pi) {
     const handlers = {
         usage: async (_a, ctx) => {
             ctx.ui.notify("Fetching live usage from Zed Cloud...", "info");
-            const creds = loadCredentials();
-            if (!creds || (!creds.accessToken && !creds.sessionCookie)) {
-                ctx.ui.notify("No Zed credentials found. Please run '/zed login' to connect your Zed account.", "warning");
+            const creds = requireCreds(ctx);
+            if (!creds)
                 return;
-            }
             const report = await fetchZedUsage(creds);
             if (report?.username && !creds.githubUsername)
                 saveCredentials({ ...creds, githubUsername: report.username, userId: report.userId || creds.userId });
             ctx.ui.notify(formatUsageSummary(report), "info");
         },
         status: async (_a, ctx) => {
-            const creds = loadCredentials();
-            if (!creds || (!creds.accessToken && !creds.sessionCookie)) {
-                ctx.ui.notify("Zed Status: Disconnected (No credentials stored). Run '/zed login'.", "warning");
+            const creds = requireCreds(ctx);
+            if (!creds)
                 return;
-            }
             const user = creds.githubUsername || creds.userId || "Authenticated User";
-            const src = creds.source === "system_keychain" ? "System Keychain / Credential Manager (Auto-detected)" : creds.source === "env" ? "Environment Variable" : "Saved Auth File";
+            const src = creds.source === "env" ? "Environment Variable" : "Saved Auth File";
             ctx.ui.notify([`🔌 Zed Pro Status: Connected`, `User:          ${user}`, `Source:        ${src}`, `Access Token:  ${maskSecret(creds.accessToken)}`, `Session Cookie:${maskSecret(creds.sessionCookie)}`, `Saved At:      ${creds.savedAt ? new Date(creds.savedAt).toLocaleString() : "Unknown"}`].join("\n"), "info");
         },
         models: async (_a, ctx) => {
@@ -73,7 +77,10 @@ export function registerZedCommands(pi) {
             openBrowser("https://dashboard.zed.dev");
             ctx.ui.notify(["Opened https://dashboard.zed.dev in your browser.", "1. Log in on dashboard.zed.dev if needed.", "2. Copy your zed.session cookie and run '/zed set-cookie <value>' if you need live billing."].join("\n"), "info");
         },
-        "reset-usage": async (_a, ctx) => { resetLocalSpendHistory(); ctx.ui.notify("✓ Local usage spend count has been reset to $0.00.", "info"); },
+        "reset-usage": async (_a, ctx) => {
+            resetLocalSpendHistory();
+            ctx.ui.notify("✓ Local usage spend count has been reset to $0.00.", "info");
+        },
     };
     pi.registerCommand("zed", {
         description: "Manage Zed Pro / Student subscription models, authentication, and usage",
@@ -83,7 +90,7 @@ export function registerZedCommands(pi) {
             if (fn)
                 await fn(args, ctx);
             else
-                ctx.ui.notify([`⚡ Zed Extension Commands:`, `• /zed usage       - View monthly credit usage & quota meter`, `• /zed sync        - Open dashboard.zed.dev to copy session cookie (manual)`, `• /zed status      - View authentication & connection status`, `• /zed models      - List all accessible Zed models`, `• /zed login       - Connect your Zed account via browser`, `• /zed logout      - Remove stored Zed credentials`, `• /zed set-token   - Manually save an access token`, `• /zed set-cookie  - Manually save a zed.session cookie`, `• /zed set-spend   - Set baseline monthly spend (e.g. /zed set-spend 1.90)`, `• /zed reset-usage - Reset local spend count to $0.00`].join("\n"), "info");
+                ctx.ui.notify(["⚡ Zed Extension Commands:", "• /zed usage       - View monthly credit usage & quota meter", "• /zed sync        - Open dashboard.zed.dev to copy session cookie (manual)", "• /zed status      - View authentication & connection status", "• /zed models      - List all accessible Zed models", "• /zed login       - Connect your Zed account via browser", "• /zed logout      - Remove stored Zed credentials", "• /zed set-token   - Manually save an access token", "• /zed set-cookie  - Manually save a zed.session cookie", "• /zed set-spend   - Set baseline monthly spend (e.g. /zed set-spend 1.90)", "• /zed reset-usage - Reset local spend count to $0.00"].join("\n"), "info");
         },
     });
 }

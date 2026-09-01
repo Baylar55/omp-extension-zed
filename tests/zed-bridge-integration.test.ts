@@ -146,24 +146,24 @@ describe("Zed Bridge Integration - Hang Fixes", () => {
     const { adaptOpenAIToZed, getZedProvider } = await import("../src/bridge/adapter.js");
 
     // Claude -> anthropic
-    const claudeReq = adaptOpenAIToZed({ model: "zed/claude-sonnet-4-6", messages: [{ role: "user", content: "hi" }] } as any);
+    const claudeReq = adaptOpenAIToZed({ model: "zed/claude-sonnet-4-6", messages: [{ role: "user", content: "hi" }] });
     expect(claudeReq.provider).toBe("anthropic");
     expect(claudeReq.model).toBe("claude-sonnet-4-6");
     expect(getZedProvider("claude-sonnet-5")).toBe("anthropic");
 
     // GPT -> open_ai
-    const gptReq = adaptOpenAIToZed({ model: "zed/gpt-5.4", messages: [{ role: "user", content: "hi" }] } as any);
+    const gptReq = adaptOpenAIToZed({ model: "zed/gpt-5.4", messages: [{ role: "user", content: "hi" }] });
     expect(gptReq.provider).toBe("open_ai");
     expect(gptReq.model).toBe("gpt-5.4");
     expect(getZedProvider("gpt-5.6-sol")).toBe("open_ai");
 
     // Gemini -> google
-    const gemReq = adaptOpenAIToZed({ model: "zed/gemini-3.5-flash", messages: [{ role: "user", content: "hi" }] } as any);
+    const gemReq = adaptOpenAIToZed({ model: "zed/gemini-3.5-flash", messages: [{ role: "user", content: "hi" }] });
     expect(gemReq.provider).toBe("google");
     expect(gemReq.model).toBe("gemini-3.5-flash");
 
-    // Dash variant handling
-    const dashReq = adaptOpenAIToZed({ model: "zed/gpt-5-6-sol", messages: [{ role: "user", content: "hi" }] } as any);
+    // Canonical prefix stripping
+    const dashReq = adaptOpenAIToZed({ model: "zed/gpt-5.6-sol", messages: [{ role: "user", content: "hi" }] });
     expect(dashReq.model).toBe("gpt-5.6-sol");
     expect(dashReq.provider).toBe("open_ai");
   });

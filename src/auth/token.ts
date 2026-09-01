@@ -1,15 +1,13 @@
-export function isJwt(token: string): boolean {
-  const t = token.trim();
-  return t.startsWith("eyJ") && t.split(".").length === 3;
-}
 export function isPlausibleJwt(token: string): boolean {
   const t = token.trim();
   return t.startsWith("eyJ") && t.split(".").length === 3 && t.length > 20;
 }
+
 export function isEncryptedPayload(token: string): boolean {
   const t = token.trim();
   return t.length >= 300 && t.length <= 500 && !isPlausibleJwt(t) && !t.startsWith("{") && /^[A-Za-z0-9-_+/=]+$/.test(t);
 }
+
 export function decodeJwtExp(token: string): number | null {
   try {
     const payload = token.split(".")[1];
@@ -19,6 +17,7 @@ export function decodeJwtExp(token: string): number | null {
   } catch {}
   return null;
 }
+
 export function normalizeToken(raw: string | undefined): string {
   if (!raw) return "";
   return raw.trim().replace(/^Bearer\s+/i, "").replace(/\s+/g, "");

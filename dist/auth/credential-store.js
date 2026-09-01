@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync, execSync } from "node:child_process";
+import { isEncryptedPayload } from "./token.js";
 /**
  * Returns the directory where OMP agent configuration and extension secrets reside.
  */
@@ -153,9 +154,8 @@ foreach ($t in $targets) {
     }
     return null;
 }
-import { isEncryptedPayload } from "./token.js";
 /**
- * Reads stored credentials from disk, checking environment variables and system keychain.
+ * Reads stored credentials from disk or environment variables.
  */
 export function loadCredentials(options) {
     // 1. Check environment variables
@@ -163,9 +163,7 @@ export function loadCredentials(options) {
     const envCookie = process.env["ZED_SESSION_COOKIE"] || process.env["ZED_COOKIE"];
     const envUserId = process.env["ZED_USER_ID"];
     if (envToken || envCookie) {
-        // Validate env token is not an undecrypted payload
         if (envToken && isEncryptedPayload(envToken)) {
-            // Treat as invalid, force re-login
             return null;
         }
         return {
@@ -178,13 +176,19 @@ export function loadCredentials(options) {
     }
     // 2. Check stored file in OMP agent directory
     const filePath = getCredentialsFilePath();
-    let fileCreds = null;
     try {
         if (fs.existsSync(filePath)) {
             const raw = fs.readFileSync(filePath, "utf-8");
             const parsed = JSON.parse(raw);
             if (!parsed.loggedOut && (parsed.accessToken || parsed.sessionCookie)) {
-                fileCreds = {
+                if (parsed.accessToken && isEncryptedPayload(parsed.accessToken)) {
+                    try {
+                        fs.unlinkSync(filePath);
+                    }
+                    catch { }
+                    return null;
+                }
+                return {
                     ...parsed,
                     source: parsed.source || "file",
                 };
@@ -193,18 +197,6 @@ export function loadCredentials(options) {
     }
     catch {
         // Ignore corrupt/unreadable files
-    }
-    if (fileCreds) {
-        if (fileCreds.accessToken && isEncryptedPayload(fileCreds.accessToken)) {
-            try {
-                const fp = getCredentialsFilePath();
-                if (fs.existsSync(fp))
-                    fs.unlinkSync(fp);
-            }
-            catch { }
-            return null;
-        }
-        return fileCreds;
     }
     if (!options?.skipSystem) {
         const sysCreds = getSystemZedCredentials();

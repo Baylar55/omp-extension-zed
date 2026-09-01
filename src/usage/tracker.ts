@@ -10,34 +10,24 @@ export interface ModelPrice {
 }
 
 export const MODEL_PRICING: Record<string, ModelPrice> = {
-  ...Object.fromEntries(ZED_MODELS.map((m) => [m.id.toLowerCase(), { input: m.cost.input, output: m.cost.output }])),
+  ...Object.fromEntries(ZED_MODELS.map((m) => [m.id, { input: m.cost.input, output: m.cost.output }])),
   default: { input: 3.3, output: 16.5 },
 };
 
 export function normalizePlanName(rawPlan?: string): string {
   if (!rawPlan) return "Zed Pro Plan";
-  const lower = rawPlan.toLowerCase().replace(/[_-]/g, " ");
-  if (lower.includes("student")) {
-    return "Zed Student Plan";
-  }
-  if (lower.includes("pro")) {
-    return "Zed Pro Plan";
-  }
-  if (lower.includes("free")) {
-    return "Zed Free Plan";
-  }
-  if (lower.includes("business") || lower.includes("team") || lower.includes("enterprise")) {
-    return "Zed Business Plan";
-  }
+  const lower = rawPlan.toLowerCase();
+  if (lower.includes("student")) return "Zed Student Plan";
+  if (lower.includes("pro")) return "Zed Pro Plan";
+  if (lower.includes("free")) return "Zed Free Plan";
+  if (lower.includes("business") || lower.includes("team") || lower.includes("enterprise")) return "Zed Business Plan";
   return `Zed ${rawPlan.charAt(0).toUpperCase() + rawPlan.slice(1)}`;
 }
 
 export function calculateModelCost(model: string, inputTokens: number, outputTokens: number): number {
-  const cleanModel = model.replace(/^zed\//i, "").toLowerCase();
-  const pricing = MODEL_PRICING[cleanModel] || MODEL_PRICING["default"];
-  const inputCost = (inputTokens / 1_000_000) * pricing.input;
-  const outputCost = (outputTokens / 1_000_000) * pricing.output;
-  return inputCost + outputCost;
+  const clean = model.replace(/^zed\//i, "").toLowerCase();
+  const pricing = MODEL_PRICING[clean] || MODEL_PRICING["default"]!;
+  return (inputTokens / 1_000_000) * pricing.input + (outputTokens / 1_000_000) * pricing.output;
 }
 
 export function getUsageHistoryPath(): string {
@@ -52,20 +42,18 @@ export interface LocalSpendRecord {
   requestCount: number;
   lastUpdated: number;
 }
+
 export function getLocalSpendHistory(): LocalSpendRecord {
   const currentPeriod = new Date().toISOString().slice(0, 7);
   const filePath = getUsageHistoryPath();
   try {
     if (fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, "utf-8");
-      const parsed = JSON.parse(raw) as LocalSpendRecord;
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as LocalSpendRecord;
       if (parsed.period === currentPeriod) {
         return parsed;
       }
     }
-  } catch {
-    // Ignore
-  }
+  } catch {}
   return {
     period: currentPeriod,
     spentAmount: 0.0,
@@ -106,6 +94,7 @@ export function recordTokenUsage(model: string, inputTokens: number, outputToken
   current.lastUpdated = Date.now();
   saveLocalSpend(current);
 }
+
 export interface ZedUsageReport {
   planName: string;
   monthlyCredit: number;
@@ -177,6 +166,7 @@ export async function fetchZedUsage(creds: ZedCredentials | null | undefined): P
   }
   return null;
 }
+
 /**
  * Formats a user-friendly string summary of the usage report for TUI display.
  */
@@ -188,7 +178,6 @@ export function formatUsageSummary(report: ZedUsageReport | null): string {
       "To connect your Zed account:",
       "• Run '/zed login' to authenticate via browser",
       "• Or run '/zed set-token <token>' to manually save your token",
-      "• Or log into Zed editor on your machine (auto-detected)",
     ].join("\n");
   }
 

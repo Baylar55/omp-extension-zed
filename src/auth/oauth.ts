@@ -4,7 +4,7 @@ import * as url from "node:url";
 import { execFile } from "node:child_process";
 import type { ZedCredentials } from "./types.js";
 import { saveCredentials } from "./credential-store.js";
-import { isPlausibleJwt } from "./token.js";
+import { isEncryptedPayload, isPlausibleJwt } from "./token.js";
 
 const DEFAULT_CALLBACK_PORT = 35711;
 
@@ -35,6 +35,10 @@ function isLocalHost(hostHeader: string | undefined): boolean {
   if (!hostHeader) return true;
   const clean = hostHeader.split(":")[0]?.toLowerCase();
   return clean === "127.0.0.1" || clean === "localhost";
+}
+
+function htmlCard(title: string, body: string, color = "#4ade80"): string {
+  return `<!DOCTYPE html><html><head><title>${title}</title><style>body{font-family:system-ui,sans-serif;background:#121212;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}.card{background:#1e1e1e;padding:2.5rem;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,0.6);text-align:center;max-width:440px;border:1px solid #333}h1{color:${color};font-size:1.6rem;margin-bottom:0.75rem}p{color:#a1a1aa;font-size:1rem;line-height:1.5}</style></head><body><div class="card"><h1>${title}</h1>${body}</div></body></html>`;
 }
 
 /**
@@ -83,13 +87,11 @@ function decryptZedToken(encryptedTokenBase64Url: string, privateKeyPem: string)
   return dec.toString("utf-8").trim();
 }
 
-
 /**
  * Runs a local loopback server and initiates Zed's native RSA PKCS#1 sign-in flow.
  */
 export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT): Promise<ZedCredentials> {
   return new Promise<ZedCredentials>((resolve, reject) => {
-    // Generate RSA keypair for this login session
     const { publicKeyBase64Url, privateKeyPem } = generateZedKeypair();
 
     const server = http.createServer((req, res) => {
@@ -102,22 +104,26 @@ export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT): Pro
         }
 
         const parsedUrl = url.parse(req.url || "", true);
+        const pathname = parsedUrl.pathname;
+
+        if (pathname !== "/callback" && pathname !== "/") {
+          res.writeHead(404, { "Content-Type": "text/plain" });
+          res.end("Not Found");
+          return;
+        }
+
         const query = parsedUrl.query;
         const rawAccessToken = (query["access_token"] || query["token"]) as string | undefined;
+        const sessionCookie = (query["session_cookie"] || query["session"]) as string | undefined;
         const userId = query["user_id"] as string | undefined;
-        const sessionCookie = query["session"] as string | undefined;
 
         if (rawAccessToken) {
           let accessToken = rawAccessToken.trim();
-          let wasEncrypted = false;
+          const looksEncrypted = isEncryptedPayload(accessToken);
 
-          // Detect encrypted RSA payload (344 chars base64 for 2048-bit, not a JWT)
-          const looksEncrypted = accessToken.length >= 300 && !isPlausibleJwt(accessToken) && !accessToken.trim().startsWith("{");
           if (looksEncrypted) {
-            wasEncrypted = true;
             try {
               const decrypted = decryptZedToken(accessToken, privateKeyPem);
-              // Only use decrypted if it looks like a real token
               if (isPlausibleJwt(decrypted) || decrypted.trim().startsWith("{")) {
                 accessToken = decrypted;
               } else {
@@ -126,30 +132,18 @@ export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT): Pro
             } catch (e) {
               const safeError = escapeHtml(e instanceof Error ? e.message : String(e));
               res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
-              res.end(`
-                <!DOCTYPE html><html><body style="font-family:system-ui;background:#121212;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh"><div style="background:#1e1e1e;padding:2rem;border-radius:12px;text-align:center;max-width:480px;border:1px solid #333">
-                <h1 style="color:#f87171">Decryption failed</h1>
-                <p>Could not decrypt Zed token. Please close this window, run <code>/zed logout</code> then <code>/zed login</code> again.</p>
-                <p style="color:#a1a1aa;font-size:0.9rem">Error: ${safeError}</p>
-                </div></body></html>
-              `);
+              res.end(htmlCard("Decryption failed", `<p>Could not decrypt Zed token. Please close this window, run <code>/zed logout</code> then <code>/zed login</code> again.</p><p style="font-size:0.9rem">Error: ${safeError}</p>`, "#f87171"));
               server.close();
               reject(new Error(`Failed to decrypt Zed token: ${e instanceof Error ? e.message : String(e)}`));
               return;
             }
           }
 
-          // Final validation: must be JWT or JSON secret
           if (!isPlausibleJwt(accessToken) && !accessToken.trim().startsWith("{") && accessToken.length < 20) {
             res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
-            res.end(`
-              <!DOCTYPE html><html><body style="font-family:system-ui;background:#121212;color:#fff;display:flex;align-items:center;justify-content:center;height:100vh"><div style="background:#1e1e1e;padding:2rem;border-radius:12px;text-align:center;max-width:480px;border:1px solid #333">
-              <h1 style="color:#f87171">Invalid token</h1>
-              <p>Received token does not look valid. Please try <code>/zed login</code> again.</p>
-              </div></body></html>
-            `);
+            res.end(htmlCard("Invalid token", `<p>Received token does not look valid. Please try <code>/zed login</code> again.</p>`, "#f87171"));
             server.close();
-            reject(new Error(`Invalid token received from Zed (length ${accessToken.length}, encrypted=${wasEncrypted})`));
+            reject(new Error(`Invalid token received from Zed (length ${accessToken.length})`));
             return;
           }
 
@@ -162,27 +156,7 @@ export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT): Pro
           saveCredentials(creds);
 
           res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-          res.end(`
-            <!DOCTYPE html>
-            <html>
-            <head>
-              <title>Zed Pro Authenticated</title>
-              <style>
-                body { font-family: system-ui, sans-serif; background: #121212; color: #fff; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-                .card { background: #1e1e1e; padding: 2.5rem; border-radius: 14px; box-shadow: 0 8px 30px rgba(0,0,0,0.6); text-align: center; max-width: 420px; border: 1px solid #333; }
-                h1 { color: #4ade80; font-size: 1.6rem; margin-bottom: 0.75rem; }
-                p { color: #a1a1aa; font-size: 1rem; line-height: 1.5; }
-              </style>
-            </head>
-            <body>
-              <div class="card">
-                <h1>✓ Zed Pro Authenticated!</h1>
-                <p>Your Zed account is now successfully connected to Oh My Pi.</p>
-                <p>You can close this browser window and return to your terminal.</p>
-              </div>
-            </body>
-            </html>
-          `);
+          res.end(htmlCard("✓ Zed Pro Authenticated!", `<p>Your Zed account is now successfully connected to Oh My Pi.</p><p>You can close this browser window and return to your terminal.</p>`));
 
           server.close();
           resolve(creds);
@@ -201,18 +175,15 @@ export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT): Pro
     server.listen(preferredPort, "127.0.0.1", () => {
       const address = server.address();
       const actualPort = typeof address === "object" && address ? address.port : preferredPort;
-
-      // Zed's official native signin endpoint
       const signinUrl = `https://zed.dev/native_app_signin?native_app_port=${actualPort}&native_app_public_key=${publicKeyBase64Url}`;
       openBrowser(signinUrl);
     });
 
     server.on("error", (err: NodeJS.ErrnoException) => {
       if (err.code === "EADDRINUSE") {
-        // Retry with a dynamic port if default port is taken
         server.listen(0, "127.0.0.1", () => {
           const address = server.address();
-          const actualPort = typeof address === "object" && address ? address.port : 0;
+          const actualPort = typeof address === "object" && address ? address.port : preferredPort;
           const signinUrl = `https://zed.dev/native_app_signin?native_app_port=${actualPort}&native_app_public_key=${publicKeyBase64Url}`;
           openBrowser(signinUrl);
         });
@@ -221,14 +192,10 @@ export async function startOAuthFlow(preferredPort = DEFAULT_CALLBACK_PORT): Pro
       }
     });
 
-    // Auto-timeout after 3 minutes if user abandons browser
     const timeout = setTimeout(() => {
       server.close();
       reject(new Error("Zed login timed out after 3 minutes."));
     }, 180000);
-
-    server.on("close", () => {
-      clearTimeout(timeout);
-    });
+    server.on("close", () => clearTimeout(timeout));
   });
 }

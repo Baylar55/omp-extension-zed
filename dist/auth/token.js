@@ -1,7 +1,3 @@
-export function isJwt(token) {
-    const t = token.trim();
-    return t.startsWith("eyJ") && t.split(".").length === 3;
-}
 export function isPlausibleJwt(token) {
     const t = token.trim();
     return t.startsWith("eyJ") && t.split(".").length === 3 && t.length > 20;

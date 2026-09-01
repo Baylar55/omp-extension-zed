@@ -2,10 +2,6 @@ import type { OpenAIChatChunk, OpenAIChatRequest, OpenAIChatResponse, OpenAIMess
 export declare function normalizeModelId(modelId: string): string;
 /**
  * Resolves the Zed provider key for a given model id.
- * Verified against GET https://cloud.zed.dev/models (2026-08-12):
- * - anthropic: claude-*
- * - open_ai: gpt-*
- * - google: gemini-*
  */
 export declare function getZedProvider(modelId: string): string;
 /**

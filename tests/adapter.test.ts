@@ -14,14 +14,21 @@ describe("Adapter utilities", () => {
     expect(normalizeModelId("zed/claude-sonnet-5")).toBe("claude-sonnet-5");
     expect(normalizeModelId("zed/claude-sonnet-4-6")).toBe("claude-sonnet-4-6");
     expect(normalizeModelId("claude-sonnet-4-5")).toBe("claude-sonnet-4-5");
+    expect(normalizeModelId("gpt-5-6-sol")).toBe("gpt-5.6-sol");
+    expect(normalizeModelId("zed/gpt-5-6-terra")).toBe("gpt-5.6-terra");
     expect(normalizeModelId("gpt-5.6-sol")).toBe("gpt-5.6-sol");
-    expect(normalizeModelId("gpt-5-6-terra")).toBe("gpt-5.6-terra");
+    expect(normalizeModelId("zed/gpt-5.6-terra")).toBe("gpt-5.6-terra");
     expect(normalizeModelId("gpt-5.4")).toBe("gpt-5.4");
+    expect(normalizeModelId("gpt-5-4")).toBe("gpt-5.4");
     expect(normalizeModelId("gpt-5-nano")).toBe("gpt-5-nano");
+    expect(normalizeModelId("gemini-3.1-pro")).toBe("gemini-3.1-pro-preview");
+    expect(normalizeModelId("gemini-3-1-pro")).toBe("gemini-3.1-pro-preview");
     expect(normalizeModelId("gemini-3.5-flash")).toBe("gemini-3.5-flash");
     expect(normalizeModelId("gemini-3-flash")).toBe("gemini-3-flash");
+    expect(normalizeModelId("sol")).toBe("gpt-5.6-sol");
+    expect(normalizeModelId("terra")).toBe("gpt-5.6-terra");
+    expect(normalizeModelId("luna")).toBe("gpt-5.6-luna");
     expect(normalizeModelId("custom-model")).toBe("custom-model");
-    expect(normalizeModelId("gemini-3.1-pro")).toBe("gemini-3.1-pro-preview");
   });
 
   it("resolves Zed provider correctly", () => {

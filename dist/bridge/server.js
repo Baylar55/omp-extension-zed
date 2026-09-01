@@ -10,20 +10,31 @@ function isLoopback(input) {
     if (!input)
         return true;
     const trimmed = input.trim().toLowerCase();
-    // explicit IPv6 loopback — split(":")[0] fails for ::1 / [::1]:port
     if (trimmed === "::1" || trimmed.startsWith("[::1]"))
         return true;
     try {
-        if (input.includes("://"))
-            return new URL(input).hostname.toLowerCase() === "127.0.0.1" || new URL(input).hostname.toLowerCase() === "localhost" || new URL(input).hostname.toLowerCase() === "::1";
-        // try URL parse with dummy scheme (handles [::1]:38142, 127.0.0.1:3000, localhost:3000)
-        const host = new URL(`http://${trimmed}`).hostname.toLowerCase();
+        const host = new URL(trimmed.includes("://") ? trimmed : `http://${trimmed}`).hostname.toLowerCase();
         return host === "127.0.0.1" || host === "localhost" || host === "::1";
     }
     catch {
-        const host = trimmed.split(":")[0].replace(/^\[|\]$/g, "");
+        const host = trimmed.split(":")[0]?.replace(/^\[|\]$/g, "");
         return host === "127.0.0.1" || host === "localhost" || host === "::1";
     }
+}
+function estTokens(text) {
+    return text ? Math.max(1, Math.ceil(text.length / 4)) : 0;
+}
+function writeSseError(res, id, model, error) {
+    const errChunk = JSON.stringify({
+        id,
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [{ index: 0, delta: { content: error }, finish_reason: "stop" }],
+    });
+    res.write(`data: ${errChunk}\n\n`);
+    res.write(createSSEChunk(id, model, {}, "stop"));
+    res.write("data: [DONE]\n\n");
 }
 /**
  * Creates and starts an in-process OpenAI-compatible HTTP bridge server for Zed.
@@ -133,40 +144,25 @@ export async function startBridgeServer(preferredPort = 38142) {
                         let totalCompletionTokens = 0;
                         let hasToolCalls = false;
                         try {
-                            let hasVisibleText = false;
                             for await (const event of client.streamCompletion(zedReq, creds)) {
                                 if (event.error) {
-                                    // Forward upstream error as SSE error before closing
-                                    const errChunk = JSON.stringify({
-                                        id: completionId,
-                                        object: "chat.completion.chunk",
-                                        created: Math.floor(Date.now() / 1000),
-                                        model: chatReq.model,
-                                        choices: [{ index: 0, delta: { content: `Error: ${event.error}` }, finish_reason: "stop" }],
-                                    });
-                                    res.write(`data: ${errChunk}\n\n`);
+                                    writeSseError(res, completionId, chatReq.model, `Error: ${event.error}`);
                                     break;
                                 }
                                 if (event.done) {
                                     break;
                                 }
                                 if (event.reasoning) {
+                                    totalCompletionTokens += estTokens(event.reasoning);
                                     res.write(createSSEChunk(completionId, chatReq.model, { reasoning_content: event.reasoning }));
-                                    // Also surface reasoning as visible text if no other text yet, to avoid empty-stop retry
-                                    if (!hasVisibleText) {
-                                        res.write(createSSEChunk(completionId, chatReq.model, { content: event.reasoning }));
-                                        totalCompletionTokens += Math.max(1, Math.ceil(event.reasoning.length / 4));
-                                        hasVisibleText = true;
-                                    }
                                 }
                                 if (event.text) {
-                                    hasVisibleText = true;
-                                    totalCompletionTokens += Math.max(1, Math.ceil(event.text.length / 4));
+                                    totalCompletionTokens += estTokens(event.text);
                                     res.write(createSSEChunk(completionId, chatReq.model, { content: event.text }));
                                 }
                                 if (event.toolCall) {
                                     hasToolCalls = true;
-                                    totalCompletionTokens += Math.max(1, Math.ceil(event.toolCall.arguments.length / 4));
+                                    totalCompletionTokens += estTokens(event.toolCall.arguments);
                                     res.write(createSSEChunk(completionId, chatReq.model, {
                                         tool_calls: [
                                             {
@@ -182,28 +178,15 @@ export async function startBridgeServer(preferredPort = 38142) {
                                     }));
                                 }
                             }
-                            // Final stop chunk and [DONE]
                             res.write(createSSEChunk(completionId, chatReq.model, {}, hasToolCalls ? "tool_calls" : "stop"));
                             res.write("data: [DONE]\n\n");
                             res.end();
-                            const promptEstTokens = Math.ceil(bodyStr.length / 4);
-                            recordTokenUsage(chatReq.model, promptEstTokens, totalCompletionTokens);
+                            recordTokenUsage(chatReq.model, estTokens(bodyStr), totalCompletionTokens);
                         }
                         catch (streamErr) {
                             const errorMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
-                            // Streaming has already sent 200 headers – we must close the SSE stream gracefully
-                            // instead of hanging. Send an error delta then [DONE] so the OMP client stops "thinking".
                             try {
-                                const errChunk = JSON.stringify({
-                                    id: completionId,
-                                    object: "chat.completion.chunk",
-                                    created: Math.floor(Date.now() / 1000),
-                                    model: chatReq.model,
-                                    choices: [{ index: 0, delta: { content: `\n\n[Zed Error: ${errorMsg}]` }, finish_reason: "stop" }],
-                                });
-                                res.write(`data: ${errChunk}\n\n`);
-                                res.write(createSSEChunk(completionId, chatReq.model, {}, "stop"));
-                                res.write("data: [DONE]\n\n");
+                                writeSseError(res, completionId, chatReq.model, `\n\n[Zed Error: ${errorMsg}]`);
                             }
                             catch { }
                             try {
@@ -215,8 +198,8 @@ export async function startBridgeServer(preferredPort = 38142) {
                     else {
                         try {
                             const result = await client.complete(zedReq, creds);
-                            const promptEstTokens = Math.ceil(bodyStr.length / 4);
-                            const complEstTokens = Math.ceil(result.content.length / 4);
+                            const promptEstTokens = estTokens(bodyStr);
+                            const complEstTokens = estTokens(result.content);
                             recordTokenUsage(chatReq.model, promptEstTokens, complEstTokens);
                             const respObj = createChatCompletionResponse(completionId, chatReq.model, result.content, promptEstTokens, complEstTokens);
                             res.writeHead(200, { "Content-Type": "application/json" });
@@ -226,12 +209,7 @@ export async function startBridgeServer(preferredPort = 38142) {
                             const errorMsg = nonStreamErr instanceof Error ? nonStreamErr.message : String(nonStreamErr);
                             if (!res.headersSent) {
                                 res.writeHead(500, { "Content-Type": "application/json" });
-                                res.end(JSON.stringify({
-                                    error: {
-                                        message: errorMsg,
-                                        type: "api_error",
-                                    },
-                                }));
+                                res.end(JSON.stringify({ error: { message: errorMsg, type: "api_error" } }));
                             }
                             else {
                                 try {
@@ -246,12 +224,7 @@ export async function startBridgeServer(preferredPort = 38142) {
                     const errorMsg = err instanceof Error ? err.message : String(err);
                     if (!res.headersSent) {
                         res.writeHead(500, { "Content-Type": "application/json" });
-                        res.end(JSON.stringify({
-                            error: {
-                                message: errorMsg,
-                                type: "api_error",
-                            },
-                        }));
+                        res.end(JSON.stringify({ error: { message: errorMsg, type: "api_error" } }));
                     }
                     else {
                         try {

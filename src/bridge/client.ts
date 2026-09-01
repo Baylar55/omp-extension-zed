@@ -2,7 +2,7 @@ import * as crypto from "node:crypto";
 import type { ZedCredentials } from "../auth/types.js";
 import type { ZedAssistantRequest } from "./types.js";
 import { ZED_ENDPOINT, ZED_VERSION } from "./types.js";
-import { decodeJwtExp, isEncryptedPayload, isJwt, normalizeToken } from "../auth/token.js";
+import { decodeJwtExp, isEncryptedPayload, isPlausibleJwt, normalizeToken } from "../auth/token.js";
 
 export interface StreamEvent {
   text?: string;
@@ -30,7 +30,7 @@ export class ZedCloudClient {
     const rawAccess = creds.accessToken?.trim() || "";
     if (isEncryptedPayload(rawAccess)) throw new Error("Invalid Zed token: appears to be an encrypted value that was not decrypted. Please run /zed logout then /zed login again.");
     const normalized = normalizeToken(rawAccess);
-    if (isJwt(normalized)) {
+    if (isPlausibleJwt(normalized)) {
       const exp = decodeJwtExp(normalized);
       if (exp && Date.now() + 5 * 60 * 1000 < exp) return normalized;
       if (this.cachedJwt && Date.now() + 5 * 60 * 1000 < this.cachedJwtExp) return this.cachedJwt;
@@ -60,10 +60,10 @@ export class ZedCloudClient {
           }
         } else {
           const text = await resp.text().catch(() => "");
-          if (!isJwt(normalized)) throw new Error(`JWT exchange failed (${resp.status}): ${text}`);
+          if (!isPlausibleJwt(normalized)) throw new Error(`JWT exchange failed (${resp.status}): ${text}`);
         }
       } catch (e) {
-        if (!isJwt(normalized)) throw new Error(`Failed to exchange Zed access token for JWT. Please run /zed login again. ${e instanceof Error ? e.message : String(e)}`);
+        if (!isPlausibleJwt(normalized)) throw new Error(`Failed to exchange Zed access token for JWT. Please run /zed login again. ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     if (normalized) return normalized;
@@ -157,13 +157,7 @@ export class ZedCloudClient {
               yield { error: failedObj?.message || (failedObj as { code?: string })?.code || JSON.stringify(failedObj) }; return;
             }
           }
-          if (json && typeof json === "object" && ("candidates" in json || (json.event && typeof (json.event as Record<string, unknown>).candidates !== "undefined"))) {
-            yield { error: "Unsupported Gemini stream shape (candidates) — re-add google parser if live. Payload: " + JSON.stringify(json).slice(0, 300) }; return;
-          }
           const event = json && typeof json === "object" && "event" in json && json.event && typeof json.event === "object" ? (json.event as Record<string, unknown>) : (json as Record<string, unknown>);
-          if (event && typeof event.type === "string" && event.type.startsWith("response.")) {
-            yield { error: `Unsupported OpenAI Responses shape ${event.type} — re-add response.* parser if live` }; return;
-          }
           if (!event || typeof event.type !== "string") {
             if (json && typeof json === "object" && ("error" in json || "message" in json)) {
               const errObj = "error" in json ? json.error : undefined;

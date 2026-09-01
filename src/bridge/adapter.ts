@@ -22,7 +22,7 @@ const MODEL_ALIASES: Record<string, string> = {
 };
 
 export function normalizeModelId(modelId: string): string {
-  const raw = modelId.replace(/^zed\//i, "").toLowerCase();
+  const raw = modelId.replace(/^zed\//i, "").trim().toLowerCase();
   const key = raw.replace(/\./g, "-");
   if (MODEL_ALIASES[key]) return MODEL_ALIASES[key]!;
   if (MODEL_ALIASES[raw]) return MODEL_ALIASES[raw]!;
@@ -34,17 +34,12 @@ export function normalizeModelId(modelId: string): string {
 
 /**
  * Resolves the Zed provider key for a given model id.
- * Verified against GET https://cloud.zed.dev/models (2026-08-12):
- * - anthropic: claude-*
- * - open_ai: gpt-*
- * - google: gemini-*
  */
 export function getZedProvider(modelId: string): string {
   const clean = normalizeModelId(modelId);
-  const lower = clean.toLowerCase();
-  if (lower.startsWith("claude-") || lower.includes("claude")) return "anthropic";
-  if (lower.startsWith("gpt-") || lower.includes("gpt") || lower.includes("luna") || lower.includes("sol") || lower.includes("terra")) return "open_ai";
-  if (lower.startsWith("gemini-") || lower.includes("gemini")) return "google";
+  if (clean.startsWith("claude-")) return "anthropic";
+  if (clean.startsWith("gpt-") || clean.includes("luna") || clean.includes("sol") || clean.includes("terra")) return "open_ai";
+  if (clean.startsWith("gemini-")) return "google";
   return "anthropic";
 }
 
@@ -63,14 +58,35 @@ function safeJsonParse(str: string | undefined): unknown | null {
   if (!str) return null;
   try { return JSON.parse(str); } catch { return null; }
 }
+
 function parseDataUrl(url: string): { mime: string; data: string } | null {
   const m = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
   return m ? { mime: m[1]!, data: m[2]! } : null;
 }
+
 function toolContent(m: OpenAIMessage): string {
   if (typeof m.content === "string") return m.content;
   if (Array.isArray(m.content)) return m.content.map((b) => (b as { text?: string }).text ?? "").join("");
   return m.content ? JSON.stringify(m.content) : "";
+}
+
+function extractUserBlocks(content: OpenAIMessage["content"]): Array<{ text?: string; mime?: string; data?: string; url?: string }> {
+  if (typeof content === "string") return content ? [{ text: content }] : [];
+  if (!Array.isArray(content)) return [];
+  const blocks: Array<{ text?: string; mime?: string; data?: string; url?: string }> = [];
+  for (const b of content as Array<{ type: string; text?: string; image_url?: { url?: string } | string }>) {
+    if (!b) continue;
+    if ((b.type === "text" || b.type === "input_text") && b.text) {
+      blocks.push({ text: b.text });
+    } else if (b.type === "image_url" || b.type === "image" || b.type === "input_image") {
+      const url = typeof b.image_url === "object" ? b.image_url?.url : (typeof b.image_url === "string" ? b.image_url : "");
+      if (url) {
+        const d = parseDataUrl(url);
+        blocks.push(d ? { mime: d.mime, data: d.data, url } : { url });
+      }
+    }
+  }
+  return blocks;
 }
 
 function extractSystemAndMessages(messages: OpenAIMessage[]): {
@@ -127,17 +143,14 @@ function buildAnthropicRequest(
   const messages: Array<{ role: string; content: unknown[] }> = [];
   for (const m of cleanMessages) {
     if (m.role === "user") {
-      const blocks: unknown[] = [];
-      if (typeof m.content === "string") { if (m.content) blocks.push({ type: "text", text: m.content }); }
-      else if (Array.isArray(m.content)) for (const b of m.content as Array<{ type: string; text?: string; image_url?: { url: string } }>) {
-        if (!b) continue;
-        if (b.type === "text" && b.text) blocks.push({ type: "text", text: b.text });
-        else if (b.type === "image_url") { const d = parseDataUrl(b.image_url?.url || ""); if (d) blocks.push({ type: "image", source: { type: "base64", media_type: d.mime, data: d.data } }); }
-      }
+      const blocks = extractUserBlocks(m.content).map((b) =>
+        b.text !== undefined ? { type: "text", text: b.text } : { type: "image", source: { type: "base64", media_type: b.mime, data: b.data } }
+      );
       if (blocks.length) messages.push({ role: "user", content: blocks });
     } else if (m.role === "assistant") {
       const blocks: unknown[] = [];
-      const text = extractTextContent(m.content); if (text) blocks.push({ type: "text", text });
+      const text = extractTextContent(m.content);
+      if (text) blocks.push({ type: "text", text });
       for (const tc of m.tool_calls || []) blocks.push({ type: "tool_use", id: tc.id || crypto.randomUUID(), name: tc.function?.name, input: safeJsonParse(tc.function?.arguments) || {} });
       if (blocks.length) messages.push({ role: "assistant", content: blocks });
     } else if (m.role === "tool") {
@@ -158,16 +171,13 @@ function buildOpenAiRequest(
   const input: unknown[] = [];
   for (const m of cleanMessages) {
     if (m.role === "user") {
-      const blocks: unknown[] = [];
-      if (typeof m.content === "string") { if (m.content) blocks.push({ type: "input_text", text: m.content }); }
-      else if (Array.isArray(m.content)) for (const b of m.content as Array<{ type: string; text?: string; image_url?: { url?: string } | string }>) {
-        if (!b) continue;
-        if ((b.type === "text" || b.type === "input_text") && b.text) blocks.push({ type: "input_text", text: b.text });
-        else if (b.type === "image_url" || b.type === "input_image") { const url = typeof b.image_url === "object" ? b.image_url?.url : b.image_url; if (url) blocks.push({ type: "input_image", image_url: url }); }
-      }
+      const blocks = extractUserBlocks(m.content).map((b) =>
+        b.text !== undefined ? { type: "input_text", text: b.text } : { type: "input_image", image_url: b.url }
+      );
       if (blocks.length) input.push({ type: "message", role: "user", content: blocks });
     } else if (m.role === "assistant") {
-      const text = extractTextContent(m.content); if (text) input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text }] });
+      const text = extractTextContent(m.content);
+      if (text) input.push({ type: "message", role: "assistant", content: [{ type: "output_text", text }] });
       for (const tc of m.tool_calls || []) input.push({ type: "function_call", call_id: tc.id || crypto.randomUUID(), name: tc.function?.name || "unknown", arguments: tc.function?.arguments || "{}" });
     } else if (m.role === "tool") {
       input.push({ type: "function_call_output", call_id: m.tool_call_id, output: toolContent(m) || "" });
@@ -188,17 +198,14 @@ function buildGoogleRequest(
   const toolNameMap = new Map<string, string>();
   for (const m of cleanMessages) {
     if (m.role === "user") {
-      const parts: unknown[] = [];
-      if (typeof m.content === "string") { if (m.content) parts.push({ text: m.content }); }
-      else if (Array.isArray(m.content)) for (const b of m.content as Array<{ type: string; text?: string; image_url?: { url: string } }>) {
-        if (!b) continue;
-        if (b.type === "text" && b.text) parts.push({ text: b.text });
-        else if (b.type === "image_url") { const d = parseDataUrl(b.image_url?.url || ""); if (d) parts.push({ inlineData: { mimeType: d.mime, data: d.data } }); }
-      }
+      const parts = extractUserBlocks(m.content).map((b) =>
+        b.text !== undefined ? { text: b.text } : { inlineData: { mimeType: b.mime, data: b.data } }
+      );
       if (parts.length) contents.push({ role: "user", parts });
     } else if (m.role === "assistant") {
       const parts: unknown[] = [];
-      const text = extractTextContent(m.content); if (text) parts.push({ text });
+      const text = extractTextContent(m.content);
+      if (text) parts.push({ text });
       for (const tc of m.tool_calls || []) {
         if (tc.id && tc.function?.name) toolNameMap.set(tc.id, tc.function.name);
         parts.push({ functionCall: { name: tc.function?.name || "unknown", args: safeJsonParse(tc.function?.arguments) || {} } });
