@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import type { ZedCredentials } from "../auth/types.js";
 import type { ZedAssistantRequest } from "./types.js";
-import { ZED_ENDPOINT, ZED_VERSION } from "./types.js";
+import { ZED_ENDPOINT, ZED_VERSION, type ZedRawModel } from "./types.js";
 import { decodeJwtExp, isEncryptedPayload, isPlausibleJwt, normalizeToken } from "../auth/token.js";
 
 export interface StreamEvent {
@@ -217,5 +217,26 @@ export class ZedCloudClient {
       if (event.done) break;
     }
     return { content: fullText, reasoning: fullReasoning || undefined };
+  }
+
+  async fetchModels(creds: ZedCredentials, signal?: AbortSignal): Promise<ZedRawModel[]> {
+    const jwt = await this.resolveJwt(creds);
+    const headers = this.buildHeadersWithJwt(jwt, creds.sessionCookie);
+    const effectiveSignal = signal || AbortSignal.timeout(15000);
+    // Derive models URL from baseUrl so custom endpoints/proxies work; fallback to cloud.zed.dev/models
+    const modelsUrl = this.baseUrl.includes("cloud.zed.dev")
+      ? this.baseUrl.replace(/\/completions\/?$/, "/models")
+      : new URL("/models", this.baseUrl).toString();
+    const res = await fetch(modelsUrl, {
+      method: "GET",
+      headers,
+      signal: effectiveSignal,
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      throw new Error(`Failed to fetch models from Zed Cloud (${res.status}): ${errText}`);
+    }
+    const data = (await res.json()) as { models?: ZedRawModel[] };
+    return data.models || [];
   }
 }

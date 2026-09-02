@@ -90,6 +90,17 @@ export interface OpenAIChatResponse {
 export const ZED_ENDPOINT = "https://cloud.zed.dev/completions";
 export const ZED_VERSION = "0.228.0+stable.203.8421009ef8a022df1196d54bb42fd94366ec0988";
 
+export interface ZedRawModel {
+  provider: string;
+  id: string;
+  display_name: string;
+  max_token_count?: number;
+  max_output_tokens?: number;
+  supports_thinking?: boolean;
+  supports_images?: boolean;
+  is_disabled?: boolean;
+}
+
 export interface ZedAssistantRequest {
   thread_id: string;
   prompt_id: string;

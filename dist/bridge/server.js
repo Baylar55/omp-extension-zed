@@ -3,7 +3,7 @@ import * as crypto from "node:crypto";
 import { loadCredentials } from "../auth/credential-store.js";
 import { adaptOpenAIToZed, createChatCompletionResponse, createSSEChunk } from "./adapter.js";
 import { ZedCloudClient } from "./client.js";
-import { ZED_MODELS } from "../models.js";
+import { getCachedZedModels } from "../models.js";
 import { recordTokenUsage } from "../usage/tracker.js";
 const MAX_PAYLOAD_BYTES = 15 * 1024 * 1024; // 15 MB
 function isLoopback(input) {
@@ -82,7 +82,7 @@ export async function startBridgeServer(preferredPort = 38142) {
             res.writeHead(200, { "Content-Type": "application/json" });
             res.end(JSON.stringify({
                 object: "list",
-                data: ZED_MODELS.map((m) => ({
+                data: getCachedZedModels().map((m) => ({
                     id: m.id,
                     object: "model",
                     created: 1700000000,

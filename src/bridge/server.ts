@@ -4,7 +4,7 @@ import { loadCredentials } from "../auth/credential-store.js";
 import { adaptOpenAIToZed, createChatCompletionResponse, createSSEChunk } from "./adapter.js";
 import { ZedCloudClient } from "./client.js";
 import type { OpenAIChatRequest } from "./types.js";
-import { ZED_MODELS } from "../models.js";
+import { getCachedZedModels } from "../models.js";
 import { recordTokenUsage } from "../usage/tracker.js";
 
 export interface BridgeServerInstance {
@@ -96,7 +96,7 @@ export async function startBridgeServer(preferredPort = 38142): Promise<BridgeSe
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({
         object: "list",
-        data: ZED_MODELS.map((m) => ({
+        data: getCachedZedModels().map((m) => ({
           id: m.id,
           object: "model",
           created: 1700000000,

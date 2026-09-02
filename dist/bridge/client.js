@@ -268,5 +268,25 @@ export class ZedCloudClient {
         }
         return { content: fullText, reasoning: fullReasoning || undefined };
     }
+    async fetchModels(creds, signal) {
+        const jwt = await this.resolveJwt(creds);
+        const headers = this.buildHeadersWithJwt(jwt, creds.sessionCookie);
+        const effectiveSignal = signal || AbortSignal.timeout(15000);
+        // Derive models URL from baseUrl so custom endpoints/proxies work; fallback to cloud.zed.dev/models
+        const modelsUrl = this.baseUrl.includes("cloud.zed.dev")
+            ? this.baseUrl.replace(/\/completions\/?$/, "/models")
+            : new URL("/models", this.baseUrl).toString();
+        const res = await fetch(modelsUrl, {
+            method: "GET",
+            headers,
+            signal: effectiveSignal,
+        });
+        if (!res.ok) {
+            const errText = await res.text().catch(() => "");
+            throw new Error(`Failed to fetch models from Zed Cloud (${res.status}): ${errText}`);
+        }
+        const data = (await res.json());
+        return data.models || [];
+    }
 }
 //# sourceMappingURL=client.js.map

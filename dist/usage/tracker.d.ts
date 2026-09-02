@@ -1,8 +1,6 @@
 import type { ZedCredentials } from "../auth/types.js";
-export interface ModelPrice {
-    input: number;
-    output: number;
-}
+import { type ModelPricingEntry } from "../models.js";
+export type ModelPrice = ModelPricingEntry;
 export declare const MODEL_PRICING: Record<string, ModelPrice>;
 export declare function normalizePlanName(rawPlan?: string): string;
 export declare function calculateModelCost(model: string, inputTokens: number, outputTokens: number): number;

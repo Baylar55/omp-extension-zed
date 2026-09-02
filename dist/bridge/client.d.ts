@@ -1,5 +1,6 @@
 import type { ZedCredentials } from "../auth/types.js";
 import type { ZedAssistantRequest } from "./types.js";
+import { type ZedRawModel } from "./types.js";
 export interface StreamEvent {
     text?: string;
     reasoning?: string;
@@ -28,5 +29,6 @@ export declare class ZedCloudClient {
         content: string;
         reasoning?: string;
     }>;
+    fetchModels(creds: ZedCredentials, signal?: AbortSignal): Promise<ZedRawModel[]>;
 }
 //# sourceMappingURL=client.d.ts.map

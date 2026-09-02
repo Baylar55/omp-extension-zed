@@ -1,1 +1,1 @@
-{"version":3,"file":"zed-command.d.ts","sourceRoot":"","sources":["../../src/commands/zed-command.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,YAAY,EAA2B,MAAM,2BAA2B,CAAC;AAiBvF,wBAAgB,mBAAmB,CAAC,EAAE,EAAE,YAAY,GAAG,IAAI,CAqE1D"}
+{"version":3,"file":"zed-command.d.ts","sourceRoot":"","sources":["../../src/commands/zed-command.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,YAAY,EAA2B,MAAM,2BAA2B,CAAC;AAiBvF,wBAAgB,mBAAmB,CAAC,EAAE,EAAE,YAAY,GAAG,IAAI,CAwE1D"}

@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@oh-my-pi/pi-coding-
 import type { ZedCredentials } from "../auth/types.js";
 import { deleteCredentialsFile, loadCredentials, maskSecret, saveCredentials } from "../auth/credential-store.js";
 import { openBrowser, startOAuthFlow } from "../auth/oauth.js";
-import { ZED_MODELS } from "../models.js";
+import { getZedModels } from "../models.js";
 import { fetchZedUsage, formatUsageSummary, resetLocalSpendHistory, setLocalSpendAmount } from "../usage/tracker.js";
 
 
@@ -33,7 +33,10 @@ export function registerZedCommands(pi: ExtensionAPI): void {
       ctx.ui.notify([`🔌 Zed Pro Status: Connected`, `User:          ${user}`, `Source:        ${src}`, `Access Token:  ${maskSecret(creds.accessToken)}`, `Session Cookie:${maskSecret(creds.sessionCookie)}`, `Saved At:      ${creds.savedAt ? new Date(creds.savedAt).toLocaleString() : "Unknown"}`].join("\n"), "info");
     },
     models: async (_a, ctx) => {
-      ctx.ui.notify(`📋 Available Zed Models:\n${ZED_MODELS.map((m) => `• zed/${m.id} (${m.name}) - Context: ${(m.contextWindow / 1000).toFixed(0)}k tokens`).join("\n")}`, "info");
+      const creds = loadCredentials();
+      const models = await getZedModels(creds, Boolean(creds?.accessToken || creds?.sessionCookie));
+      const lines = models.map((m) => `• zed/${m.id} (${m.name}) - Context: ${(m.contextWindow / 1000).toFixed(0)}k tokens`);
+      ctx.ui.notify(`📋 Available Zed Models:\n${lines.join("\n")}`, "info");
     },
     login: async (_a, ctx) => {
       ctx.ui.notify("Starting Zed authentication in browser...", "info");

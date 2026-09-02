@@ -2,7 +2,7 @@ import { loadCredentials, saveCredentials } from "./auth/credential-store.js";
 import { startOAuthFlow } from "./auth/oauth.js";
 import { startBridgeServer } from "./bridge/server.js";
 import { registerZedCommands } from "./commands/zed-command.js";
-import { ZED_MODELS } from "./models.js";
+import { fetchRemoteZedModels, getCachedZedModels } from "./models.js";
 let activeBridge = null;
 /**
  * Main Oh My Pi extension factory for Zed Pro & Student Integration.
@@ -17,7 +17,7 @@ export default async function ompZedExtension(pi) {
         baseUrl: activeBridge.baseUrl,
         api: "openai-completions",
         authHeader: false,
-        models: ZED_MODELS,
+        models: getCachedZedModels(),
         oauth: {
             name: "Zed Pro / Student Plan",
             login: async (_callbacks) => {
@@ -33,7 +33,21 @@ export default async function ompZedExtension(pi) {
     pi.on("session_start", async (_event, ctx) => {
         const creds = loadCredentials();
         if (creds && (creds.accessToken || creds.sessionCookie)) {
-            const sampleModels = ZED_MODELS.slice(0, 3).map((m) => `zed/${m.id}`).join(", ");
+            // Background-refresh model cache and live-update provider so new models appear without restart
+            fetchRemoteZedModels(creds)
+                .then((models) => {
+                if (models.length > 0) {
+                    pi.registerProvider("zed", {
+                        baseUrl: activeBridge.baseUrl,
+                        api: "openai-completions",
+                        authHeader: false,
+                        models,
+                    });
+                }
+            })
+                .catch(() => { });
+            const models = getCachedZedModels();
+            const sampleModels = models.slice(0, 3).map((m) => `zed/${m.id}`).join(", ");
             ctx.ui.notify(`Zed Pro extension active. Models ready: ${sampleModels}`, "info");
         }
         else {

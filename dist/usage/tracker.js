@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getOmpAgentDir } from "../auth/credential-store.js";
-import { ZED_MODELS } from "../models.js";
+import { DEFAULT_MODEL_PRICING } from "../models.js";
 export const MODEL_PRICING = {
-    ...Object.fromEntries(ZED_MODELS.map((m) => [m.id, { input: m.cost.input, output: m.cost.output }])),
+    ...DEFAULT_MODEL_PRICING,
     default: { input: 3.3, output: 16.5 },
 };
 export function normalizePlanName(rawPlan) {
